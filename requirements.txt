@@ -1,0 +1,6 @@
+click
+pydantic>=2.6
+pyyaml
+networkx
+matplotlib
+ipywidgets

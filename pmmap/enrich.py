@@ -1,0 +1,233 @@
+"""Enrichment stage: fingerprint aggregation and optional p0f OS guesses."""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from collections import Counter, defaultdict
+from typing import Iterable, Sequence
+
+from .cpe import CPEMapper, map_host_fingerprints
+from .utils import write_jsonl
+
+
+PCAP_EXTENSIONS = ('.pcap', '.pcapng', '.pcap.gz', '.pcapng.gz')
+
+
+class EnrichError(RuntimeError):
+    """Raised when enrichment fails."""
+
+
+def _load_flows(flows_path: str):
+    """Yield parsed flow objects from flows.jsonl."""
+    if os.path.isdir(flows_path):
+        flows_file = os.path.join(flows_path, 'flows.jsonl')
+    else:
+        flows_file = flows_path
+    if not os.path.isfile(flows_file):
+        raise FileNotFoundError(f"Soubor s toky '{flows_file}' neexistuje.")
+    with open(flows_file, 'r', encoding='utf-8') as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+
+def _collect_files(inputs: Sequence[str], extensions: Sequence[str]) -> list[str]:
+    """Expand files/directories and filter by extension list."""
+    files: list[str] = []
+    for item in inputs or []:
+        if not item:
+            continue
+        expanded = os.path.abspath(item)
+        if os.path.isdir(expanded):
+            for root, _, names in os.walk(expanded):
+                for fname in names:
+                    if extensions and not fname.lower().endswith(extensions):
+                        continue
+                    files.append(os.path.join(root, fname))
+        elif os.path.isfile(expanded):
+            if not extensions or expanded.lower().endswith(extensions):
+                files.append(expanded)
+        else:
+            raise EnrichError(f"Cesta '{item}' neexistuje.")
+    return files
+
+
+def _parse_p0f_log(text: str) -> dict[str, Counter]:
+    """Parse p0f log lines to accumulate OS guesses per IP."""
+    ip_os: dict[str, Counter] = defaultdict(Counter)
+    # p0f v3 log line format: mod=...|cli=IP/port|srv=IP/port|subj=cli|os=Windows NT kernel|...
+    pattern_os_line = re.compile(r'os=([^|]+)')
+    pattern_cli = re.compile(r'cli=([0-9]{1,3}(?:\.[0-9]{1,3}){3})/')
+    pattern_srv = re.compile(r'srv=([0-9]{1,3}(?:\.[0-9]{1,3}){3})/')
+    pattern_subj = re.compile(r'subj=([a-z]+)')
+    # fallback for very old log style with "genre"
+    pattern_legacy = re.compile(r'(\d+\.\d+\.\d+\.\d+)[^\n]*genre\s+([^|\n]+)')
+    for line in text.splitlines():
+        os_match = pattern_os_line.search(line)
+        if os_match:
+            guess = os_match.group(1).strip()
+            if guess and guess not in ('???', 'unknown'):
+                subj_match = pattern_subj.search(line)
+                subj = subj_match.group(1) if subj_match else None
+                cli = pattern_cli.search(line)
+                srv = pattern_srv.search(line)
+                ip = None
+                if subj == 'cli' and cli:
+                    ip = cli.group(1)
+                elif subj == 'srv' and srv:
+                    ip = srv.group(1)
+                elif cli:
+                    ip = cli.group(1)
+                elif srv:
+                    ip = srv.group(1)
+                if ip:
+                    ip_os[ip][guess] += 1
+                continue
+        legacy_match = pattern_legacy.search(line)
+        if legacy_match:
+            ip = legacy_match.group(1)
+            genre = legacy_match.group(2).strip()
+            if ip and genre:
+                ip_os[ip][genre] += 1
+    return ip_os
+
+
+def _run_p0f(pcap_files: Sequence[str], p0f_bin: str) -> dict[str, Counter]:
+    """Run p0f over supplied pcaps; return OS guess counters per IP."""
+    results: dict[str, Counter] = defaultdict(Counter)
+    if not pcap_files:
+        return results
+    p0f_path = shutil.which(p0f_bin)
+    if not p0f_path:
+        print(f"[enrich] P0f '{p0f_bin}' nebyl nalezen, přeskočeno.")
+        return results
+    for pcap in pcap_files:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            log_path = tmp.name
+        cmd = [p0f_path, '-r', pcap, '-o', log_path]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as exc:
+            print(f"[enrich] p0f selhal pro {pcap}: {exc}")
+            try:
+                os.remove(log_path)
+            except OSError:
+                pass
+            continue
+        try:
+            with open(log_path, 'r', encoding='utf-8', errors='replace') as fh:
+                parsed = _parse_p0f_log(fh.read())
+                for ip, counter in parsed.items():
+                    results[ip].update(counter)
+        finally:
+            try:
+                os.remove(log_path)
+            except OSError:
+                pass
+    return results
+
+
+def _add_value(counter: Counter, value):
+    if value:
+        counter[value] += 1
+
+
+def _format_counter(counter: Counter) -> list[dict]:
+    return [{'value': val, 'count': count} for val, count in counter.most_common()]
+
+
+def run(
+    flows_path: str,
+    out_dir: str,
+    pcap_inputs: Iterable[str] | None = None,
+    p0f_bin: str = 'p0f',
+    cpe_map_path: str | None = None,
+):
+    """Aggregate fingerprints from flows and optional p0f OS guesses."""
+    hosts: dict[str, dict] = defaultdict(lambda: {
+        'ja3': Counter(),
+        'ja3s': Counter(),
+        'hassh': Counter(),
+        'sni_served': Counter(),
+        'sni_used': Counter(),
+        'dns_queries': Counter(),
+        'os': Counter(),
+    })
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    cpe_candidates = [
+        cpe_map_path,
+        os.environ.get('PMMAP_CPE_MAP'),
+        os.path.join(repo_root, 'data', 'cpe_map.yaml'),
+        os.path.join(repo_root, 'data', 'cpe_map.sample.yaml'),
+    ]
+    resolved_cpe_map = next((p for p in cpe_candidates if p and os.path.isfile(p)), None)
+    cpe_mapper = CPEMapper.from_file(resolved_cpe_map)
+    if resolved_cpe_map:
+        print(f"[enrich] Používám CPE mapování: {resolved_cpe_map}")
+
+    for rec in _load_flows(flows_path):
+        src_ip = rec.get('src_ip')
+        dst_ip = rec.get('dst_ip')
+        ja3 = rec.get('ja3')
+        ja3s = rec.get('ja3s')
+        hassh = rec.get('hassh')
+        sni = rec.get('sni')
+        dns_qname = rec.get('dns_qname')
+
+        if src_ip and ja3:
+            _add_value(hosts[src_ip]['ja3'], ja3)
+        if dst_ip and ja3s:
+            _add_value(hosts[dst_ip]['ja3s'], ja3s)
+        if src_ip and hassh:
+            _add_value(hosts[src_ip]['hassh'], hassh)
+        if dst_ip and sni:
+            _add_value(hosts[dst_ip]['sni_served'], sni)
+        if src_ip and sni:
+            _add_value(hosts[src_ip]['sni_used'], sni)
+        if src_ip and dns_qname:
+            _add_value(hosts[src_ip]['dns_queries'], dns_qname)
+
+    pcap_list = _collect_files(list(pcap_inputs or []), PCAP_EXTENSIONS)
+    if pcap_list:
+        print(f"[enrich] Spouštím p0f nad {len(pcap_list)} PCAP soubory.")
+        os_fingerprints = _run_p0f(pcap_list, p0f_bin)
+        for ip, guesses in os_fingerprints.items():
+            hosts[ip]['os'].update(guesses)
+
+    os.makedirs(out_dir, exist_ok=True)
+    records = []
+    for ip, data in sorted(hosts.items(), key=lambda item: item[0]):
+        record = {
+            'ip': ip,
+            'client_ja3': _format_counter(data['ja3']),
+            'server_ja3s': _format_counter(data['ja3s']),
+            'hassh': _format_counter(data['hassh']),
+            'sni_served': _format_counter(data['sni_served']),
+            'sni_used': _format_counter(data['sni_used']),
+            'dns_queries': _format_counter(data['dns_queries']),
+        }
+        if data['os']:
+            record['os_guesses'] = _format_counter(data['os'])
+        cpe_entries = map_host_fingerprints(
+            mapper=cpe_mapper,
+            ja3=data['ja3'].keys(),
+            ja3s=data['ja3s'].keys(),
+            hassh=data['hassh'].keys(),
+            sni_values=set(list(data['sni_served'].keys()) + list(data['sni_used'].keys())),
+        ) if cpe_mapper else []
+        if cpe_entries:
+            record['cpe'] = cpe_entries
+        records.append(record)
+
+    out_path = os.path.join(out_dir, 'enriched_hosts.jsonl')
+    write_jsonl(out_path, records)
+    print(f"[enrich] Uloženo {len(records)} záznamů → {out_path}")
