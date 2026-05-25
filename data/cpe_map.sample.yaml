@@ -1,0 +1,50 @@
+ja3:
+  # Chrome/Chromium family example
+  "771,4865-49151-49161-49171-52393-52402-52411-49167-49157-49172-57-56-53-49162-49168-49166-49160-49170-49169-49161-49165-49200-49202-158-159-103-107-49164-49159-49158-49163-190-69-22-157-51-50-156-154-153-47-255,0-11-10-35-13-5-18-23-65281-0-1-16-11-21,29-23-24,0":
+    "cpe:2.3:a:google:chrome:-:*:*:*:*:*:*:*"
+  # Cesnet TLS samples (Google Play Services / Android clients)
+  "20ab9bbd3c036476e32abecc348ea1ec": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "d8c87b9bfde38897979e41242626c2f3": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "6ec2896feff5746955f700c0023f5804": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "9c815150ea821166faecf80757d8826a": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "5c30d36b48eadea98d9aa2cdfbf2464b": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "6894a4245ec2c2c9334c988550192448": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "2b4e1dfa4f01e1dbdc14d6b19a18f7f5": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "c40a84cbd7399ccd89ec0757975e3576": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "d08a0ae040a1214d41b83609eaa7eb9d": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+  "76d81106bd8c977ff89319595c51fb36": "cpe:2.3:o:google:android:-:*:*:*:*:*:*:*"
+ja3s:
+  # Apache httpd example
+  "771,49195-49199-49200-49201-49202-49188-49192-49187-49191-49162-49172-53-57-156-47-255,0-65281-10-11-35-5-13,23-24,0":
+    "cpe:2.3:a:apache:http_server:-:*:*:*:*:*:*:*"
+hassh:
+  # OpenSSH 9.x example
+  "768d1d8bb92343d1998e208f6e3a39e1":
+    "cpe:2.3:a:openbsd:openssh:*:*:*:*:*:*:*:*"
+sni:
+  exact:
+    "outlook.office365.com": "cpe:2.3:a:microsoft:office_365:-:*:*:*:*:*:*:*"
+    "login.microsoftonline.com": "cpe:2.3:a:microsoft:azure_active_directory:-:*:*:*:*:*:*:*"
+    "openpgpkey.archlinux.org": "cpe:2.3:o:archlinux:arch_linux:*:*:*:*:*:*:*:*"
+    "openpgpkey.master-key.archlinux.org": "cpe:2.3:o:archlinux:arch_linux:*:*:*:*:*:*:*:*"
+    "www.googleapis.com": "cpe:2.3:a:google:google_api_client:*:*:*:*:*:*:*:*"
+    "android.googleapis.com": "cpe:2.3:a:google:google_api_client:*:*:*:*:*:*:*:*"
+    "deviceintegritytokens-pa.googleapis.com": "cpe:2.3:a:google:google_api_client:*:*:*:*:*:*:*:*"
+    "android.apis.google.com": "cpe:2.3:a:google:google_api_client:*:*:*:*:*:*:*:*"
+    "connectivitycheck.gstatic.com": "cpe:2.3:a:google:google_api_client:*:*:*:*:*:*:*:*"
+    "firebaseinstallations.googleapis.com": "cpe:2.3:a:google:firebase:*:*:*:*:*:*:*:*"
+    "dl.google.com": "cpe:2.3:a:google:google_update:*:*:*:*:*:*:*:*"
+    "www.google.com": "cpe:2.3:a:google:chrome:-:*:*:*:*:*:*:*"
+    "play-fe.googleapis.com": "cpe:2.3:a:google:google_play_services:*:*:*:*:*:*:*:*"
+    "notifications-pa.googleapis.com": "cpe:2.3:a:google:google_play_services:*:*:*:*:*:*:*:*"
+    "gmscompliance-pa.googleapis.com": "cpe:2.3:a:google:google_play_services:*:*:*:*:*:*:*:*"
+    "www.gstatic.com": "cpe:2.3:a:google:google_api_client:*:*:*:*:*:*:*:*"
+    "play.googleapis.com": "cpe:2.3:a:google:google_play_services:*:*:*:*:*:*:*:*"
+    "android-safebrowsing.google.com": "cpe:2.3:a:google:google_api_client:*:*:*:*:*:*:*:*"
+    "ssl.google-analytics.com": "cpe:2.3:a:google:analytics:*:*:*:*:*:*:*:*"
+    "safebrowsing.googleapis.com": "cpe:2.3:a:google:safe_browsing_api:*:*:*:*:*:*:*:*"
+  regex:
+    - pattern: ".*\\.okta\\.com$"
+      cpe: "cpe:2.3:a:okta:okta:-:*:*:*:*:*:*:*"
+    - pattern: ".*\\.amazonaws\\.com$"
+      cpe: "cpe:2.3:a:amazon:aws:-:*:*:*:*:*:*:*"

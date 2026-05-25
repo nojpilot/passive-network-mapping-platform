@@ -18,7 +18,7 @@ def _load_graph(graph_path: str) -> dict:
     else:
         candidate = graph_path
     if not os.path.isfile(candidate):
-        raise FileNotFoundError(f"Soubor s grafem '{candidate}' neexistuje.")
+        raise FileNotFoundError(f"Graph file '{candidate}' does not exist.")
     with open(candidate, 'r', encoding='utf-8') as fh:
         return json.load(fh)
 
@@ -73,8 +73,8 @@ def _internal_scores(nodes: Iterable[dict], edges: Iterable[dict], betweenness_s
             betweenness_enabled = True
         else:
             print(
-                "[criticality] Graf je příliš velký, betweenness centrality přeskočena "
-                "(používám degree + bytes)."
+                "[criticality] Graph is too large; betweenness centrality was skipped "
+                "(using degree and bytes)."
             )
         if betweenness_enabled:
             betweenness = nx.betweenness_centrality(
@@ -104,7 +104,7 @@ def _internal_scores(nodes: Iterable[dict], edges: Iterable[dict], betweenness_s
 
     results: list[dict] = []
     for node_id, attrs in G.nodes(data=True):
-        # skórujeme hosty; služby mají jen podpůrný charakter
+        # Score hosts; service nodes only provide supporting structure.
         if attrs.get('type') and attrs.get('type') != 'host':
             continue
         score = (
@@ -112,7 +112,7 @@ def _internal_scores(nodes: Iterable[dict], edges: Iterable[dict], betweenness_s
             + w_degree * _norm(degree.get(node_id, 0), max_degree)
             + w_bytes * _norm(bytes_totals.get(node_id, 0), max_bytes)
         )
-        # mírný boost pro dobře definované role
+        # Slight boost for well-defined infrastructure roles.
         roles = attrs.get('roles') or []
         if any(r in ('dns_server', 'ldap', 'kerberos', 'mail_server') for r in roles):
             score += 0.05
@@ -182,12 +182,12 @@ def _run_external(cmd: str, payload: dict) -> list[dict] | None:
             check=True,
         )
     except Exception as exc:
-        print(f"[criticality] Externí nástroj selhal: {exc}")
+        print(f"[criticality] External tool failed: {exc}")
         return None
     try:
         output = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        print("[criticality] Nelze parsovat JSON výstup externího nástroje, používám interní skóre.")
+        print("[criticality] Cannot parse external tool JSON output, using internal scoring.")
         return None
     return output
 
@@ -226,9 +226,9 @@ def run(
                 os.makedirs(dump_dir, exist_ok=True)
             with open(dump_input_path, 'w', encoding='utf-8') as fh:
                 json.dump(payload, fh, ensure_ascii=False, indent=2)
-            print(f"[criticality] Uložen vstupní payload pro externí nástroj: {dump_input_path}")
+            print(f"[criticality] Saved input payload for external tool: {dump_input_path}")
         except Exception as exc:
-            print(f"[criticality] Nelze uložit dump vstupu: {exc}")
+            print(f"[criticality] Cannot save input dump: {exc}")
 
     if external_cmd:
         external_raw = _run_external(external_cmd, payload)
@@ -249,4 +249,4 @@ def run(
     top_path = os.path.join(out_dir, 'criticality_top.json')
     with open(top_path, 'w', encoding='utf-8') as fh:
         json.dump(results[:10], fh, ensure_ascii=False, indent=2)
-    print(f"[criticality] Uloženo {len(results)} výsledků → {jsonl_path}")
+    print(f"[criticality] Wrote {len(results)} results -> {jsonl_path}")

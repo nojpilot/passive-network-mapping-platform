@@ -18,7 +18,7 @@ class IngestError(RuntimeError):
 def _ensure_tool(name: str) -> str:
     path = shutil.which(name)
     if not path:
-        raise IngestError(f"Nástroj '{name}' nebyl nalezen v PATH.")
+        raise IngestError(f"Tool '{name}' was not found in PATH.")
     return path
 
 
@@ -39,7 +39,7 @@ def _collect_files(inputs: Sequence[str], extensions: Sequence[str]) -> list[str
             if not extensions or expanded.lower().endswith(extensions):
                 files.append(expanded)
         else:
-            raise IngestError(f"Cesta '{item}' neexistuje.")
+            raise IngestError(f"Path '{item}' does not exist.")
     return files
 
 
@@ -55,12 +55,12 @@ def _run_zeek(pcap_files: Sequence[str], out_dir: str, zeek_bin: str, zeek_scrip
     if zeek_scripts:
         cmd.extend(zeek_scripts)
     else:
-        # default lokální politika
+        # Default local policy.
         cmd.append('local')
     try:
         subprocess.run(cmd, cwd=out_dir, check=True)
     except subprocess.CalledProcessError as exc:
-        raise IngestError(f"Zeek selhal při zpracování PCAP vstupů: {exc}") from exc
+        raise IngestError(f"Zeek failed while processing PCAP inputs: {exc}") from exc
 
 
 def _run_nfdump(flow_files: Sequence[str], out_dir: str, nfdump_bin: str, output_format: str):
@@ -71,7 +71,7 @@ def _run_nfdump(flow_files: Sequence[str], out_dir: str, nfdump_bin: str, output
     os.makedirs(out_dir, exist_ok=True)
     fmt = output_format.lower()
     if fmt not in ('csv', 'json'):
-        raise IngestError("Podporované formáty nfdump exportu jsou 'csv' nebo 'json'.")
+        raise IngestError("Supported nfdump export formats are 'csv' and 'json'.")
     for flow_path in flow_files:
         base = Path(flow_path).stem
         suffix = 'csv' if fmt == 'csv' else 'json'
@@ -80,7 +80,7 @@ def _run_nfdump(flow_files: Sequence[str], out_dir: str, nfdump_bin: str, output
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as exc:
-            raise IngestError(f"nfdump selhal pro soubor {flow_path}: {exc.stderr}") from exc
+            raise IngestError(f"nfdump failed for file {flow_path}: {exc.stderr}") from exc
         with open(out_file, 'w', encoding='utf-8') as fh:
             fh.write(result.stdout)
 
@@ -98,13 +98,13 @@ def run(
     pcap_list = _collect_files(list(pcap_inputs or []), PCAP_EXTENSIONS)
     netflow_list = _collect_files(list(netflow_inputs or []), NETFLOW_EXTENSIONS)
     if not pcap_list and not netflow_list:
-        raise IngestError("Musíš zadat alespoň jednu cestu k PCAP nebo NetFlow vstupu.")
+        raise IngestError("Provide at least one PCAP or NetFlow input path.")
 
     zeek_out = os.path.join(out_dir, 'zeek')
     netflow_out = os.path.join(out_dir, 'nfdump')
 
     if pcap_list:
-        print(f"[ingest] Spouštím Zeek nad {len(pcap_list)} PCAP soubory → {zeek_out}")
+        print(f"[ingest] Running Zeek over {len(pcap_list)} PCAP files -> {zeek_out}")
         _run_zeek(
             pcap_files=pcap_list,
             out_dir=zeek_out,
@@ -112,11 +112,11 @@ def run(
             zeek_scripts=list(zeek_scripts) if zeek_scripts else None,
         )
     if netflow_list:
-        print(f"[ingest] Exportuji {len(netflow_list)} NetFlow souborů pomocí nfdump → {netflow_out}")
+        print(f"[ingest] Exporting {len(netflow_list)} NetFlow files with nfdump -> {netflow_out}")
         _run_nfdump(
             flow_files=netflow_list,
             out_dir=netflow_out,
             nfdump_bin=nfdump_bin,
             output_format=netflow_format,
         )
-    print(f"[ingest] Hotovo. Výstupy najdeš v {out_dir}.")
+    print(f"[ingest] Done. Outputs are in {out_dir}.")

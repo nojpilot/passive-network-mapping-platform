@@ -1,48 +1,80 @@
-## Integrace prototypu z bakalářky (link-prediction, Zenodo 10548434)
+# Link-Prediction Prototype Integration
 
-Zdroj: https://zenodo.org/records/10548434 (MIT licencované doplňky k článku Identifikace závislostí pomocí link prediction).
+This note documents how the project can call the external link-prediction prototype
+used for dependency discovery experiments.
 
-Repozitář už obsahuje rozbalený kód v `data/prototype/link-prediction`.
+Source artifact: https://zenodo.org/records/10548434
 
-### Požadavky
+The prototype source is not versioned in this repository. The repository is kept
+code-first and does not include large third-party research artifacts or generated
+outputs. If you need to run the prototype, download it locally and place it under:
 
-- Python ≤ 3.11 (PyTorch/torch_geometric zatím nepodporují 3.13)
-- Závislosti z `data/prototype/link-prediction/requirements.txt` (torch, torch_geometric, scikit-learn, networkx, numpy, matplotlib, scipy).
-
-Příklad instalace v odděleném venv (pokud máš python3.10/3.11 k dispozici):
+```text
+data/prototype/link-prediction
 ```
+
+## Requirements
+
+- Python 3.10 or 3.11. The prototype depends on PyTorch and torch-geometric,
+  which are not suitable for the Python 3.13 environment used by the main project.
+- Dependencies from `data/prototype/link-prediction/requirements.txt`.
+
+Example isolated environment:
+
+```bash
 python3.10 -m venv data/prototype/.venv
 source data/prototype/.venv/bin/activate
 pip install -r data/prototype/link-prediction/requirements.txt
 ```
 
-### Běh prototypu na Cyber Czech datech
+## Running the Prototype on Cyber Czech Data
 
-Použij wrapper `scripts/prototype_runner.py`, který jen volá původní kód (nic nepřepisujeme):
-```
-# připraví BT1-6 split a spustí correctness_evaluation()
+Use `scripts/prototype_runner.py`. The wrapper prepares the expected input split
+and calls the original prototype code without modifying it:
+
+```bash
 PYTHONPATH=data/prototype/link-prediction \
   data/prototype/.venv/bin/python scripts/prototype_runner.py \
   --data-json data/raw/cyber_czech/cz.muni.csirt.IPFlowEntry/data.json \
   --mode correctness
 ```
 
-Výstupy zůstanou v `data/prototype/link-prediction/correctness/` (txt+PDF) a dalších složkách prototypu.
+The prototype writes its outputs into its own directories, for example:
 
-#### Varianta Docker (když nechceš řešit Python na hostu)
-
+```text
+data/prototype/link-prediction/correctness/
 ```
-# vyžaduje docker a stažený Cyber Czech dataset
+
+## Docker Variant
+
+If you do not want to install the prototype dependencies on the host, use:
+
+```bash
 scripts/run_prototype_docker.sh
 ```
 
-Image se postaví z `Dockerfile.prototype` (Python 3.10 + torch) a spustí correctness_evaluation uvnitř kontejneru, výstupy se promítnou do `data/prototype/link-prediction`.
+The script builds `Dockerfile.prototype` with Python 3.10 and the required ML
+dependencies. Outputs are mounted back into `data/prototype/link-prediction`.
 
-### Napojení na naši pipeline
+## Relationship to This Pipeline
 
-- Pro kritičnost můžeš využít `main.py criticality --external-cmd` a posílat mu JSON payload (viz `README_external_criticality.md`). Pokud přidáš vlastní wrapper nad prototypem, stačí, aby četl stdin JSON a vracel JSON se skóre.
-- Pro úplné převzetí metody link prediction by bylo potřeba do wrapperu doplnit inference části z prototypu (train_model → RandomForest → predikce závislostí). Kvůli závislosti na PyTorch to tady nespouštíme, ale kód je k dispozici v `data/prototype/link-prediction`.
+The main passive mapping pipeline does not require the prototype. It remains an
+optional integration point for experiments that compare graph-based dependency
+prediction with the deterministic pipeline outputs.
 
-### Poznámka pro závěrečnou práci
+For node criticality, `main.py criticality --external-cmd` can send a JSON graph
+payload to any external tool. See `README_external_criticality.md` for the exact
+interface. A custom wrapper around the prototype only needs to read JSON from
+stdin and return JSON scores on stdout.
 
-Použitý kód je z výše uvedené bakalářské práce / NOMS 2024 materiálů (MIT licence, autoři Sadlek/Husák/Čeleda). Při využití uveď citaci dle README v prototypu. My jsme kód jen zabalili a přidali wrapper, původní implementaci neměníme.
+Full reuse of the link-prediction method would require adding an inference
+wrapper around the prototype training and prediction code. That is intentionally
+kept outside the core CLI because it brings a separate PyTorch-based dependency
+stack.
+
+## Thesis Note
+
+The prototype comes from the referenced thesis and NOMS 2024 materials. When it
+is used for experiments, cite the original source according to its README. This
+repository only provides a wrapper and does not modify the original
+implementation.

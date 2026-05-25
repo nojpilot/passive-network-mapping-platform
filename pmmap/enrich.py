@@ -107,7 +107,7 @@ def _run_p0f(pcap_files: Sequence[str], p0f_bin: str) -> dict[str, Counter]:
         return results
     p0f_path = shutil.which(p0f_bin)
     if not p0f_path:
-        print(f"[enrich] P0f '{p0f_bin}' nebyl nalezen, přeskočeno.")
+        print(f"[enrich] p0f '{p0f_bin}' was not found, skipping.")
         return results
     for pcap in pcap_files:
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
@@ -116,7 +116,7 @@ def _run_p0f(pcap_files: Sequence[str], p0f_bin: str) -> dict[str, Counter]:
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as exc:
-            print(f"[enrich] p0f selhal pro {pcap}: {exc}")
+            print(f"[enrich] p0f failed for {pcap}: {exc}")
             try:
                 os.remove(log_path)
             except OSError:
@@ -172,7 +172,7 @@ def run(
     resolved_cpe_map = next((p for p in cpe_candidates if p and os.path.isfile(p)), None)
     cpe_mapper = CPEMapper.from_file(resolved_cpe_map)
     if resolved_cpe_map:
-        print(f"[enrich] Používám CPE mapování: {resolved_cpe_map}")
+        print(f"[enrich] Using CPE mapping: {resolved_cpe_map}")
 
     for rec in _load_flows(flows_path):
         src_ip = rec.get('src_ip')
@@ -183,6 +183,10 @@ def run(
         sni = rec.get('sni')
         dns_qname = rec.get('dns_qname')
 
+        if src_ip:
+            hosts[src_ip]
+        if dst_ip:
+            hosts[dst_ip]
         if src_ip and ja3:
             _add_value(hosts[src_ip]['ja3'], ja3)
         if dst_ip and ja3s:
@@ -198,7 +202,7 @@ def run(
 
     pcap_list = _collect_files(list(pcap_inputs or []), PCAP_EXTENSIONS)
     if pcap_list:
-        print(f"[enrich] Spouštím p0f nad {len(pcap_list)} PCAP soubory.")
+        print(f"[enrich] Running p0f over {len(pcap_list)} PCAP files.")
         os_fingerprints = _run_p0f(pcap_list, p0f_bin)
         for ip, guesses in os_fingerprints.items():
             hosts[ip]['os'].update(guesses)
@@ -230,4 +234,4 @@ def run(
 
     out_path = os.path.join(out_dir, 'enriched_hosts.jsonl')
     write_jsonl(out_path, records)
-    print(f"[enrich] Uloženo {len(records)} záznamů → {out_path}")
+    print(f"[enrich] Wrote {len(records)} records -> {out_path}")

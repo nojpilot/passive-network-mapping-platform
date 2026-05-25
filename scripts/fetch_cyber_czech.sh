@@ -9,20 +9,20 @@ URL="https://zenodo.org/record/3746129/files/cz.muni.csirt.IPFlowEntry.tgz?downl
 mkdir -p "${TARGET_DIR}"
 
 if [ ! -f "${ARCHIVE}" ]; then
-  echo "[fetch] Stahuji Cyber Czech IPFlow dataset → ${ARCHIVE}"
+  echo "[fetch] Downloading Cyber Czech IPFlow dataset -> ${ARCHIVE}"
   curl -L "${URL}" -o "${ARCHIVE}"
 else
-  echo "[fetch] Archiv už existuje: ${ARCHIVE}"
+  echo "[fetch] Archive already exists: ${ARCHIVE}"
 fi
 
 if [ ! -d "${TARGET_DIR}/cz.muni.csirt.IPFlowEntry" ]; then
-  echo "[fetch] Rozbaluji archiv..."
+  echo "[fetch] Extracting archive..."
   tar -xzf "${ARCHIVE}" -C "${TARGET_DIR}"
 fi
 
 if [ -f "${TARGET_DIR}/cz.muni.csirt.IPFlowEntry/data.json.gz" ] && [ ! -f "${TARGET_DIR}/cz.muni.csirt.IPFlowEntry/data.json" ]; then
-  echo "[fetch] Rozbaluji data.json.gz..."
+  echo "[fetch] Extracting data.json.gz..."
   gunzip -kf "${TARGET_DIR}/cz.muni.csirt.IPFlowEntry/data.json.gz"
 fi
 
-echo "[fetch] Připravený soubor: ${TARGET_DIR}/cz.muni.csirt.IPFlowEntry/data.json"
+echo "[fetch] Prepared file: ${TARGET_DIR}/cz.muni.csirt.IPFlowEntry/data.json"

@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """
-Wrapper nad prototypem (link-prediction) z https://zenodo.org/records/10548434.
+Wrapper for the link-prediction prototype from https://zenodo.org/records/10548434.
 
-Čte původní Cyber Czech data.json, připraví per-team vstupy a spustí correctness evaluation
-(tj. původní kód bez úprav). Vyžaduje Python ≤3.11 a závislosti z
-data/prototype/link-prediction/requirements.txt (PyTorch/torch_geometric).
+It reads the original Cyber Czech data.json file, prepares per-team inputs, and
+runs correctness evaluation from the original implementation. It requires Python
+3.10 or 3.11 and dependencies from data/prototype/link-prediction/requirements.txt
+(PyTorch/torch-geometric).
 """
 
 from __future__ import annotations
@@ -20,45 +21,53 @@ sys.path.insert(0, PROTO_ROOT)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Spusť Python prototyp (link-prediction) z bakalářky.")
+    parser = argparse.ArgumentParser(description="Run the link-prediction Python prototype.")
     parser.add_argument(
         "--data-json",
         default=os.path.join(REPO_ROOT, "data", "raw", "cyber_czech", "cz.muni.csirt.IPFlowEntry", "data.json"),
-        help="Cesta k původnímu data.json z Cyber Czech (bidirectional flows).",
+        help="Path to the original Cyber Czech data.json file with bidirectional flows.",
     )
     parser.add_argument(
         "--mode",
         choices=["prepare", "correctness"],
         default="correctness",
-        help="prepare = jen vytvoř split pro BT1-6; correctness = spustí correctness_evaluation().",
+        help="prepare = create only the BT1-6 split; correctness = run correctness_evaluation().",
     )
     args = parser.parse_args()
+
+    if not os.path.isdir(PROTO_ROOT):
+        sys.stderr.write(
+            "Prototype directory does not exist: "
+            f"{PROTO_ROOT}\n"
+            "Download and unpack the prototype from https://zenodo.org/records/10548434 into this path.\n"
+        )
+        sys.exit(1)
 
     try:
         from data_acquisition import create_files_for_blue_teams
         from evaluation import correctness_evaluation
     except Exception as exc:
         sys.stderr.write(
-            f"Nelze importovat prototyp. Ujisti se, že běžíš s Pythonem ≤3.11 a máš nainstalované "
-            f"závislosti z {os.path.join(PROTO_ROOT, 'requirements.txt')} (torch/torch_geometric atd.). "
-            f"Chyba: {exc}\n"
+            f"Cannot import the prototype. Make sure Python 3.10 or 3.11 is used and dependencies from "
+            f"{os.path.join(PROTO_ROOT, 'requirements.txt')} are installed (torch/torch-geometric, etc.). "
+            f"Error: {exc}\n"
         )
         sys.exit(1)
 
     if not os.path.isfile(args.data_json):
-        sys.stderr.write(f"Soubor {args.data_json} neexistuje – zadej cestu k původnímu data.json.\n")
+        sys.stderr.write(f"File {args.data_json} does not exist. Provide a path to the original data.json.\n")
         sys.exit(1)
 
     os.chdir(PROTO_ROOT)
-    print(f"[prototype] Připravuji BT files z {args.data_json}")
+    print(f"[prototype] Preparing BT files from {args.data_json}")
     create_files_for_blue_teams(args.data_json)
 
     if args.mode == "correctness":
-        print("[prototype] Spouštím correctness_evaluation() z prototypu...")
+        print("[prototype] Running correctness_evaluation() from the prototype...")
         correctness_evaluation()
-        print("[prototype] Hotovo. Výsledky jsou v ./correctness/*.txt/pdf (v rámci prototypu).")
+        print("[prototype] Done. Results are in ./correctness/*.txt/pdf inside the prototype directory.")
     else:
-        print("[prototype] Jen prepare mód – BT soubory vytvořeny.")
+        print("[prototype] Prepare-only mode finished. BT files were created.")
 
 
 if __name__ == "__main__":

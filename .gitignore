@@ -11,6 +11,10 @@ __pycache__/
 
 # Do not version local datasets/outputs
 /data/**
+!/data/cpe_map.sample.yaml
+!/data/flows_demo.csv
+!/data/nmap-services/
+!/data/nmap-services/nmap-services
 
 # Large capture/binary artifacts
 *.pcap

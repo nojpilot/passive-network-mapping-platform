@@ -72,7 +72,7 @@ def _load_flows(flows_path: str):
     else:
         flows_file = flows_path
     if not os.path.isfile(flows_file):
-        raise FileNotFoundError(f"Soubor s toky '{flows_file}' neexistuje.")
+        raise FileNotFoundError(f"Flow file '{flows_file}' does not exist.")
     yield from _load_jsonl(flows_file)
 
 
@@ -114,7 +114,7 @@ def run(
     enriched_hosts_path: str | None = None,
     min_flows: int = 1,
 ):
-    """Build host→service graph edges with roles and name signals."""
+    """Build host-to-service graph edges with roles and name signals."""
     hosts: Dict[str, dict] = defaultdict(lambda: {'roles': set(), 'os': None, 'cpe': set()})
     services: Dict[str, dict] = {}
     edges: Dict[tuple[str, str], dict] = {}
@@ -246,4 +246,4 @@ def run(
 
     edges_path = os.path.join(out_dir, 'edges.jsonl')
     write_jsonl(edges_path, edges_payload)
-    print(f"[analyze] Graf uložen do {out_json} ({len(nodes_payload)} uzlů, {len(edges_payload)} hran).")
+    print(f"[analyze] Graph saved to {out_json} ({len(nodes_payload)} nodes, {len(edges_payload)} edges).")

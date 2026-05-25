@@ -116,6 +116,10 @@ def create_report_dashboard(
         if make_pdf.value:
             print("PDF:", report_dir / "report.pdf")
 
+    def _generate_then_export() -> None:
+        _generate_charts()
+        _export_report(regenerate_figures=False)
+
     def _wrap(action):
         with output:
             clear_output(wait=True)
@@ -125,15 +129,15 @@ def create_report_dashboard(
                 print(f"Error: {exc}")
 
     btn_graphs.on_click(lambda _: _wrap(_generate_charts))
-    btn_export.on_click(lambda _: _wrap(_export_report))
-    btn_all.on_click(lambda _: _wrap(_export_report))
+    btn_export.on_click(lambda _: _wrap(lambda: _export_report(regenerate_figures=False)))
+    btn_all.on_click(lambda _: _wrap(_generate_then_export))
 
     return widgets.VBox(
         [
             widgets.HTML("<h3>Report Dashboard</h3>"),
             widgets.HTML(
                 f"<code>run_dir={run_path}</code><br/>"
-                "Usage: <b>Export Report</b> regenerates figures and report in one click."
+                "Usage: <b>Export Report</b> uses existing figures; <b>Generate + Export</b> refreshes charts first."
             ),
             title,
             top_k,

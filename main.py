@@ -1,48 +1,53 @@
 import click
 from pmmap import pipeline
 
-# Společné flagy pro filtrování dle požadavku vedoucího
+# Shared filtering flags for thesis network-scope constraints.
 NETFLAGS = [
-    click.option('--include-cidrs', multiple=True, help='Seznam CIDR (interní adresní rozsahy).'),
-    click.option('--exclude-cidrs', multiple=True, help='Seznam CIDR k vyloučení.'),
-    click.option('--drop-outside', is_flag=True, help='Vynechat záznamy, které nespadají do definovaných rozsahů.'),
+    click.option('--include-cidrs', multiple=True, help='CIDR ranges to include, usually internal address ranges.'),
+    click.option('--exclude-cidrs', multiple=True, help='CIDR ranges to exclude.'),
+    click.option('--drop-outside', is_flag=True, help='Drop records outside the configured include ranges.'),
 ]
+
 
 @click.group()
 def cli():
     pass
 
+
 @cli.command(name='normalize')
-@click.option('--input', type=str, required=True, help='Vstupní složka s nfdump CSV (např. data/raw).')
-@click.option('--output', type=str, required=True, help='Výstupní složka pro flows.jsonl (např. data/normalized).')
+@click.option('--input', type=str, required=True, help='Input directory with nfdump CSV files, for example data/raw.')
+@click.option('--output', type=str, required=True, help='Output directory for flows.jsonl, for example data/normalized.')
 @NETFLAGS[0]
 @NETFLAGS[1]
 @NETFLAGS[2]
 def normalize(input, output, include_cidrs, exclude_cidrs, drop_outside):
-    """Převeď nfdump CSV → flows.jsonl (JSON Lines)."""
-    pipeline.normalize(
-        input_dir=input,
-        out_dir=output,
-        include_cidrs=include_cidrs,
-        exclude_cidrs=exclude_cidrs,
-        drop_outside=drop_outside,
-    )
+    """Convert nfdump CSV files to flows.jsonl (JSON Lines)."""
+    try:
+        pipeline.normalize(
+            input_dir=input,
+            out_dir=output,
+            include_cidrs=include_cidrs,
+            exclude_cidrs=exclude_cidrs,
+            drop_outside=drop_outside,
+        )
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @cli.command(name='ingest')
 @click.option('--pcap', 'pcap_inputs', type=click.Path(exists=True), multiple=True,
-              help='PCAP/PCAPNG soubory nebo složky se stopami.')
+              help='PCAP/PCAPNG files or directories.')
 @click.option('--netflow', 'netflow_inputs', type=click.Path(exists=True), multiple=True,
-              help='NetFlow/IPFIX soubory nebo složky (např. nfcapd.*).')
-@click.option('--output', type=str, required=True, help='Cílová složka pro výstupy (zeek/, nfdump/).')
-@click.option('--zeek-bin', default='zeek', show_default=True, help='Binárka Zeek.')
+              help='NetFlow/IPFIX files or directories, for example nfcapd.*.')
+@click.option('--output', type=str, required=True, help='Target directory for outputs (zeek/, nfdump/).')
+@click.option('--zeek-bin', default='zeek', show_default=True, help='Zeek binary.')
 @click.option('--zeek-script', 'zeek_scripts', multiple=True,
-              help='Volitelné Zeek skripty (defaultně se spouští local).')
-@click.option('--nfdump-bin', default='nfdump', show_default=True, help='Binárka nfdump.')
+              help='Optional Zeek scripts. By default, Zeek runs local.')
+@click.option('--nfdump-bin', default='nfdump', show_default=True, help='nfdump binary.')
 @click.option('--netflow-format', type=click.Choice(['csv', 'json']), default='csv', show_default=True,
-              help='Formát výstupu z nfdump.')
+              help='nfdump output format.')
 def ingest(pcap_inputs, netflow_inputs, output, zeek_bin, zeek_scripts, nfdump_bin, netflow_format):
-    """Spusť Zeek/nfdump ingest podle návrhu workflow."""
+    """Run Zeek/nfdump ingest according to the workflow."""
     try:
         pipeline.ingest(
             out_dir=output,
@@ -59,32 +64,32 @@ def ingest(pcap_inputs, netflow_inputs, output, zeek_bin, zeek_scripts, nfdump_b
 
 @cli.command(name='inventory')
 @click.option('--flows', type=str, required=True,
-              help='Cesta k flows.jsonl souboru (nebo složce, kde je uložen).')
+              help='Path to flows.jsonl or to a directory containing it.')
 @click.option('--output', type=str, required=True,
-              help='Složka, kam se uloží hosts.jsonl.')
+              help='Output directory for hosts.jsonl.')
 def inventory(flows, output):
-    """Seskup výstup normalize → hosts.jsonl."""
+    """Group normalized flows into hosts.jsonl."""
     try:
         pipeline.inventory(flows_path=flows, out_dir=output)
     except FileNotFoundError as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:
-        raise click.ClickException(f"Inventarizace selhala: {exc}") from exc
+        raise click.ClickException(f"Inventory failed: {exc}") from exc
 
 
 @cli.command(name='enrich')
 @click.option('--flows', type=str, required=True,
-              help='Cesta k flows.jsonl (normalize) pro fingerprint agregaci.')
+              help='Path to flows.jsonl for fingerprint aggregation.')
 @click.option('--output', type=str, required=True,
-              help='Složka, kam se uloží enriched_hosts.jsonl.')
+              help='Output directory for enriched_hosts.jsonl.')
 @click.option('--pcap', 'pcap_inputs', type=click.Path(exists=True), multiple=True,
-              help='PCAP/PCAPNG soubory/složky pro p0f OS fingerprinting (volitelné).')
+              help='Optional PCAP/PCAPNG files or directories for p0f OS fingerprinting.')
 @click.option('--p0f-bin', default='p0f', show_default=True,
-              help='Binárka p0f pro pasivní fingerprinting OS.')
+              help='p0f binary for passive OS fingerprinting.')
 @click.option('--cpe-map', 'cpe_map_path', type=str,
-              help='Cesta k YAML/JSON mapování fingerprint → CPE 2.3 (volitelné).')
+              help='Optional YAML/JSON mapping from fingerprints to CPE 2.3 identifiers.')
 def enrich(flows, output, pcap_inputs, p0f_bin, cpe_map_path):
-    """Agreguj JA3/JA3S/HASSH/SNI/DNS + CPE mapování a volitelný p0f OS guess do enriched_hosts.jsonl."""
+    """Aggregate JA3/JA3S/HASSH/SNI/DNS, CPE mapping, and optional p0f OS guesses."""
     try:
         pipeline.enrich(
             flows_path=flows,
@@ -94,22 +99,22 @@ def enrich(flows, output, pcap_inputs, p0f_bin, cpe_map_path):
             cpe_map_path=cpe_map_path,
         )
     except Exception as exc:
-        raise click.ClickException(f"Enrich selhal: {exc}") from exc
+        raise click.ClickException(f"Enrich failed: {exc}") from exc
 
 
 @cli.command(name='analyze')
 @click.option('--flows', type=str, required=True,
-              help='Cesta k flows.jsonl (normalize).')
+              help='Path to flows.jsonl.')
 @click.option('--output', type=str, required=True,
-              help='Složka, kam se uloží graf (graph.json, edges.jsonl).')
+              help='Output directory for graph.json and edges.jsonl.')
 @click.option('--hosts', type=str, required=False,
-              help='Volitelný hosts.jsonl z inventáře pro role/OS.')
+              help='Optional hosts.jsonl from inventory for role and OS metadata.')
 @click.option('--enriched-hosts', type=str, required=False,
-              help='Volitelné enriched_hosts.jsonl s fingerprinty/OS.')
+              help='Optional enriched_hosts.jsonl with fingerprints and OS metadata.')
 @click.option('--min-flows', type=int, default=1, show_default=True,
-              help='Minimální počet toků pro ponechání hrany v grafu.')
+              help='Minimum number of flows required to keep an edge in the graph.')
 def analyze(flows, output, hosts, enriched_hosts, min_flows):
-    """Vytvoř graf závislostí host → služba + role a hostname signály."""
+    """Build a host-to-service dependency graph with role and hostname signals."""
     try:
         pipeline.analyze(
             flows_path=flows,
@@ -119,22 +124,21 @@ def analyze(flows, output, hosts, enriched_hosts, min_flows):
             min_flows=min_flows,
         )
     except Exception as exc:
-        raise click.ClickException(f"Analyze selhalo: {exc}") from exc
+        raise click.ClickException(f"Analyze failed: {exc}") from exc
 
 
 @cli.command(name='criticality')
 @click.option('--graph', type=str, required=True,
-              help='Cesta k graph.json (výstup analyze).')
-@click.option('--output', type=str, required=True,
-              help='Složka pro criticality výstup.')
+              help='Path to graph.json produced by analyze.')
+@click.option('--output', type=str, required=True, help='Output directory for criticality results.')
 @click.option('--hosts', type=str, required=False,
-              help='Volitelný enriched_hosts.jsonl pro další metadata (CPE/role/OS).')
+              help='Optional enriched_hosts.jsonl with additional CPE, role, and OS metadata.')
 @click.option('--external-cmd', type=str, required=False,
-              help='Externí nástroj pro kritičnost (čte JSON na stdin, vrací JSON na stdout).')
+              help='External criticality tool. It reads JSON from stdin and returns JSON on stdout.')
 @click.option('--dump-input', 'dump_input_path', type=str, required=False,
-              help='Cesta pro uložení JSON payloadu pro externí nástroj.')
+              help='Path for saving the JSON payload sent to the external tool.')
 def criticality(graph, output, hosts, external_cmd, dump_input_path):
-    """Seřaď uzly podle kritičnosti (interní heuristiky nebo externí nástroj)."""
+    """Rank nodes by criticality using the built-in heuristic or an external tool."""
     try:
         pipeline.criticality(
             graph_path=graph,
@@ -144,23 +148,23 @@ def criticality(graph, output, hosts, external_cmd, dump_input_path):
             dump_input_path=dump_input_path,
         )
     except Exception as exc:
-        raise click.ClickException(f"Criticality selhalo: {exc}") from exc
+        raise click.ClickException(f"Criticality failed: {exc}") from exc
 
 
 @cli.command(name='export')
-@click.option('--hosts', type=str, required=True, help='hosts.jsonl z inventory.')
-@click.option('--graph', type=str, required=True, help='graph.json z analyze.')
-@click.option('--criticality', type=str, required=False, help='criticality.jsonl z criticality kroku.')
-@click.option('--output', type=str, required=True, help='Složka pro report (summary.json, report.md).')
+@click.option('--hosts', type=str, required=True, help='hosts.jsonl from inventory.')
+@click.option('--graph', type=str, required=True, help='graph.json from analyze.')
+@click.option('--criticality', type=str, required=False, help='criticality.jsonl from the criticality step.')
+@click.option('--output', type=str, required=True, help='Output directory for summary.json and report.md.')
 @click.option('--title', type=str, default='Passive Network Mapping Report', show_default=True,
-              help='Titulek reportu.')
-@click.option('--pdf', is_flag=True, help='Pokud je pandoc dostupný, vygeneruj i PDF.')
-@click.option('--enriched', type=str, required=False, help='Volitelné enriched_hosts.jsonl pro fingerprint/CPE přehled.')
-@click.option('--top-k', type=int, default=10, show_default=True, help='Počet položek v TOP tabulkách.')
+              help='Report title.')
+@click.option('--pdf', is_flag=True, help='Generate PDF when pandoc is available.')
+@click.option('--enriched', type=str, required=False, help='Optional enriched_hosts.jsonl for fingerprint/CPE overview.')
+@click.option('--top-k', type=int, default=10, show_default=True, help='Number of rows in top tables.')
 @click.option('--figures-manifest', type=str, required=False,
-              help='Volitelný JSON manifest obrázků pro vložení do reportu.')
+              help='Optional JSON figure manifest to include in the report.')
 def export(hosts, graph, criticality, output, title, pdf, enriched, top_k, figures_manifest):
-    """Vygeneruj summary JSON, Markdown (a volitelně PDF) z výsledků pipeline."""
+    """Generate summary JSON, Markdown, and optionally PDF from pipeline outputs."""
     try:
         pipeline.export(
             hosts_path=hosts,
@@ -174,7 +178,8 @@ def export(hosts, graph, criticality, output, title, pdf, enriched, top_k, figur
             figures_manifest_path=figures_manifest,
         )
     except Exception as exc:
-        raise click.ClickException(f"Export selhal: {exc}") from exc
+        raise click.ClickException(f"Export failed: {exc}") from exc
+
 
 if __name__ == '__main__':
     cli()

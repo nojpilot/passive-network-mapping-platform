@@ -1,16 +1,17 @@
 """Convert Zeek/nfdump outputs into unified Flow objects."""
 
 import os
+import glob
 import datetime
 from .schema import Flow
 from .utils import NetFilter, iter_csv, iter_zeek_log, iter_nfdump_json, write_jsonl
 
-# Převod nfdump CSV → unified Flow dict
+# Convert nfdump CSV rows to unified Flow dictionaries.
 
 _NUM = { 'ts','sp','dp','pkt','byt','td' }
 
 _DEF_MAP = {
-    # csv header → naše pole
+    # CSV headers mapped to internal fields.
     'ts': 'ts',
     'sa': 'src_ip',
     'sp': 'src_port',
@@ -20,7 +21,7 @@ _DEF_MAP = {
     'pkt': 'pkts',
     'byt': 'bytes',
     'td': 'duration',
-    # fallback názvy, pokud export má jiné hlavičky
+    # Fallback names for alternative exporter headers.
     'time': 'ts',
     'srcip': 'src_ip',
     'src': 'src_ip',
@@ -42,7 +43,7 @@ _DEF_MAP = {
     'out_bytes': 'bytes',
     'in_packets': 'pkts',
     'out_packets': 'pkts',
-    # Cyber Czech / obecné IPFIX názvy
+    # Cyber Czech and generic IPFIX names.
     'sourceipv4address': 'src_ip',
     'destinationipv4address': 'dst_ip',
     'sourceipv6address': 'src_ip',
@@ -55,7 +56,7 @@ _DEF_MAP = {
     'packetdeltacount': 'pkts',
     'packetdeltacount_rev': 'pkts',
     'flowstartmilliseconds': 'ts',
-    'flowendmilliseconds': 'duration',  # použijeme pro délku po dopočtu
+    'flowendmilliseconds': 'duration',  # used for duration after post-processing
     'flowendmilliseconds_rev': 'duration',
     'biflowstartmilliseconds': 'ts',
     'biflowendmilliseconds': 'duration',
@@ -119,7 +120,7 @@ def _map_row(r: dict):
             if ts_val is not None:
                 out[key] = ts_val
         elif key == 'duration':
-            # Pokud dorazila flow_end timestamp, použijeme rozdíl až na konci
+            # If this is a flow-end timestamp, calculate the duration later.
             out[key] = _to_float(v)
         elif key in {'proto','src_ip','dst_ip'}:
             if key == 'proto':
@@ -139,9 +140,9 @@ def _map_row(r: dict):
 def _normalize_epoch(value: float) -> float:
     """Normalize timestamp to seconds (handles ms/us/ns epochs)."""
     if value > 1e15:
-        return value / 1e9  # nanoseconds → seconds
+        return value / 1e9  # nanoseconds to seconds
     if value > 1e12:
-        return value / 1e3  # milliseconds → seconds
+        return value / 1e3  # milliseconds to seconds
     if value > 1e10:
         return value / 1e3  # also milliseconds
     return value
@@ -183,7 +184,7 @@ def _normalize_proto_value(value) -> str | None:
         num = int(value)
         if num in mapping:
             return mapping[num]
-        # pokud je číslo mimo mapu, necháme číselnou reprezentaci
+        # Keep unknown protocol numbers as numeric strings.
         return str(num)
     except Exception:
         pass
@@ -253,7 +254,7 @@ def _map_common_zeek_fields(r: dict, default_proto: str | None = None):
 def _map_zeek_conn_row(r: dict):
     """Normalize conn.log rows (Zeek) into Flow-like records."""
     out = _map_common_zeek_fields(r)
-    # conn.log vždy obsahuje bytes → pokud helper nic nenasbíral, nastav nulu
+    # conn.log always contains bytes; use zero if the shared helper did not collect any.
     out.setdefault('bytes', 0)
     return out
 
@@ -365,6 +366,28 @@ def _map_zeek_dhcp_row(r: dict):
 
 def run(input_dir: str, out_dir: str, net_cfg: dict | None = None):
     """Normalize all supported inputs within input_dir into flows.jsonl."""
+    if not os.path.isdir(input_dir):
+        raise FileNotFoundError(f"Input directory '{input_dir}' does not exist.")
+
+    supported_patterns = (
+        '**/*.csv',
+        '**/*.json',
+        '**/conn.log',
+        '**/dns.log',
+        '**/ssl.log',
+        '**/ssh.log',
+        '**/dhcp.log',
+    )
+    has_supported_inputs = any(
+        glob.glob(os.path.join(input_dir, pattern), recursive=True)
+        for pattern in supported_patterns
+    )
+    if not has_supported_inputs:
+        raise FileNotFoundError(
+            f"No supported inputs were found in input directory '{input_dir}' "
+            "(CSV/JSON/Zeek logs)."
+        )
+
     nf = NetFilter(
         include_cidrs=(net_cfg or {}).get('include_cidrs'),
         exclude_cidrs=(net_cfg or {}).get('exclude_cidrs'),
@@ -418,7 +441,7 @@ def run(input_dir: str, out_dir: str, net_cfg: dict | None = None):
             if uid:
                 existing = uid_index.get(uid)
                 if existing:
-                    # doplň chybějící nebo volitelná pole
+                    # Fill missing or optional fields from later Zeek rows with the same uid.
                     for key in (
                         'dns_qname',
                         'sni',
@@ -437,7 +460,7 @@ def run(input_dir: str, out_dir: str, net_cfg: dict | None = None):
                         value = flow_dict.get(key)
                         if value:
                             existing[key] = value
-                    # doplnění kvantitativních údajů, pokud chybí
+                    # Fill quantitative fields when they are missing.
                     for key in ('ts', 'src_port', 'dst_port'):
                         value = flow_dict.get(key)
                         if value and not existing.get(key):
@@ -458,7 +481,7 @@ def run(input_dir: str, out_dir: str, net_cfg: dict | None = None):
             return
 
     for name, reader in iter_csv(input_dir):
-        # očekáváme nfdump CSV s hlavičkou obsahující aspoň ts, sa, da, pr, ...
+        # Expect nfdump CSV headers with at least ts, sa, da, pr, and related fields.
         for r in reader:
             rec = _map_row(r)
             _append_flow(rec)
@@ -488,4 +511,4 @@ def run(input_dir: str, out_dir: str, net_cfg: dict | None = None):
         _append_flow(rec)
 
     write_jsonl(out_path, records)
-    print(f"Wrote {len(records)} flows → {out_path}")
+    print(f"Wrote {len(records)} flows -> {out_path}")

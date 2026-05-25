@@ -6,12 +6,12 @@ RAW_JSON="${REPO_ROOT}/data/raw/cyber_czech/cz.muni.csirt.IPFlowEntry/data.json"
 FETCH_SCRIPT="${REPO_ROOT}/scripts/fetch_cyber_czech.sh"
 
 if [ ! -f "${RAW_JSON}" ]; then
-  echo "[smoke] Cyber Czech dataset nenalezen, spouštím fetch skript..."
+  echo "[smoke] Cyber Czech dataset not found, running fetch script..."
   "${FETCH_SCRIPT}"
 fi
 
 if [ ! -f "${RAW_JSON}" ]; then
-  echo "[smoke] Data stále chybí (${RAW_JSON}), ukončuji."
+  echo "[smoke] Data is still missing (${RAW_JSON}), exiting."
   exit 1
 fi
 
@@ -27,7 +27,7 @@ if [ ! -x "${PYTHON_BIN}" ]; then
   PYTHON_BIN="python"
 fi
 
-echo "[smoke] normalize → inventory → enrich → analyze → criticality → export"
+echo "[smoke] normalize -> inventory -> enrich -> analyze -> criticality -> export"
 "${PYTHON_BIN}" "${REPO_ROOT}/main.py" normalize --input "$(dirname "${RAW_JSON}")" --output "${NORM_DIR}"
 "${PYTHON_BIN}" "${REPO_ROOT}/main.py" inventory --flows "${NORM_DIR}" --output "${INV_DIR}"
 "${PYTHON_BIN}" "${REPO_ROOT}/main.py" enrich --flows "${NORM_DIR}" --output "${ENRICH_DIR}" --cpe-map "${REPO_ROOT}/data/cpe_map.sample.yaml"
@@ -36,17 +36,17 @@ echo "[smoke] normalize → inventory → enrich → analyze → criticality →
 "${PYTHON_BIN}" "${REPO_ROOT}/main.py" export --hosts "${INV_DIR}/hosts.jsonl" --graph "${GRAPH_DIR}/graph.json" --criticality "${CRIT_DIR}/criticality.jsonl" --output "${EXPORT_DIR}" --title "Cyber Czech Report" --pdf --enriched "${ENRICH_DIR}/enriched_hosts.jsonl"
 
 if [ "${RUN_PROTOTYPE:-0}" = "1" ]; then
-  echo "[smoke] Spouštím prototyp (docker) nad Cyber Czech..."
+  echo "[smoke] Running prototype (docker) on Cyber Czech..."
   if command -v docker >/dev/null 2>&1; then
     "${REPO_ROOT}/scripts/run_prototype_docker.sh"
   else
-    echo "[smoke] Docker není k dispozici, prototyp se nespustil."
+    echo "[smoke] Docker is not available, prototype was not started."
   fi
 else
-  echo "[smoke] Prototyp přeskočen (nastav RUN_PROTOTYPE=1 pro spuštění)."
+  echo "[smoke] Prototype skipped. Set RUN_PROTOTYPE=1 to run it."
 fi
 
-echo "[smoke] Hotovo."
+echo "[smoke] Done."
 echo "  Flows:      ${NORM_DIR}/flows.jsonl"
 echo "  Hosts:      ${INV_DIR}/hosts.jsonl"
 echo "  Enriched:   ${ENRICH_DIR}/enriched_hosts.jsonl"

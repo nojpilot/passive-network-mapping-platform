@@ -2,7 +2,7 @@ import os, csv, glob, json
 from ipaddress import ip_address, ip_network
 from typing import Iterable
 
-# Bez povinného configu – flagy mají přednost, ale zkusíme defaulty z config.yaml, pokud existuje
+# The config file is optional; CLI flags take precedence over config.yaml defaults.
 
 def _load_yaml_safe(path: str):
     try:
@@ -24,7 +24,7 @@ class NetFilter:
         self.drop_outside = drop_outside or filters_cfg.get('drop_outside_ranges', False)
 
     def in_ranges(self, ip: str) -> bool:
-        # true = projde; false = vyhoď (pokud drop_outside)
+        # True means the address is allowed; false means it can be dropped.
         try:
             addr = ip_address(ip)
         except Exception:
@@ -34,10 +34,10 @@ class NetFilter:
         if self.include:
             inside = any(addr in n for n in self.include)
             return inside
-        # Pokud nejsou definované include rozsahy, necháme projít (pokud nechceme dropnout vše)
+        # If include ranges are not defined, keep the address unless exclusions matched.
         return True
 
-# Najdi všechny CSV v dané složce (a podsložkách)
+# Find all CSV files in the directory tree.
 
 def iter_csv(input_dir: str):
     for path in glob.glob(os.path.join(input_dir, '**', '*.csv'), recursive=True):
@@ -48,7 +48,7 @@ def iter_csv(input_dir: str):
                 continue
             yield os.path.basename(path).lower(), reader
 
-# Ulož JSON Lines
+# Write JSON Lines.
 
 def write_jsonl(path: str, records):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -56,7 +56,7 @@ def write_jsonl(path: str, records):
         for r in records:
             fw.write(json.dumps(r) + '\n')
 
-# Iterátor nad nfdump JSON exporty
+# Iterate over nfdump JSON exports.
 
 def iter_nfdump_json(input_dir: str):
     pattern = os.path.join(input_dir, '**', '*.json')
@@ -64,7 +64,7 @@ def iter_nfdump_json(input_dir: str):
         if os.path.basename(path) == 'flows.jsonl':
             continue
 
-        # Prefer streamovaný JSON Lines u větších souborů (např. Cyber Czech)
+        # Prefer streamed JSON Lines for larger files, for example Cyber Czech.
         size_bytes = 0
         try:
             size_bytes = os.path.getsize(path)
@@ -108,13 +108,13 @@ def iter_nfdump_json(input_dir: str):
                             if isinstance(entry, dict):
                                 yield path, entry
             continue
-        # fallback na JSON Lines (1 objekt na řádek)
+        # Fallback to JSON Lines, one object per line.
         for entry in iter_json_lines(content.splitlines()):
             yield path, entry
 
 
 def iter_json_lines_file(path: str) -> Iterable[dict]:
-    """Stream JSON Lines z disku (1 objekt na řádek, toleruje čárky)."""
+    """Stream JSON Lines from disk, one object per line, tolerating trailing commas."""
     try:
         with open(path, 'r', encoding='utf-8', errors='replace') as fh:
             for line in fh:
@@ -132,7 +132,7 @@ def iter_json_lines_file(path: str) -> Iterable[dict]:
 
 
 def iter_json_lines(lines: Iterable[str]) -> Iterable[dict]:
-    """Stream JSON Lines ze sekvence stringů (1 objekt na řádek)."""
+    """Stream JSON Lines from a string sequence, one object per line."""
     for raw in lines:
         stripped = raw.strip().rstrip(',').strip()
         if not stripped or stripped in ('[', ']'):
@@ -144,7 +144,7 @@ def iter_json_lines(lines: Iterable[str]) -> Iterable[dict]:
         if isinstance(entry, dict):
             yield entry
 
-# Iterátor nad Zeek TSV logy (např. conn.log, dns.log, ...)
+# Iterate over Zeek TSV logs, for example conn.log or dns.log.
 
 def iter_zeek_log(input_dir: str, log_name: str):
     pattern = os.path.join(input_dir, '**', f'{log_name}.log')

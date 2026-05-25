@@ -153,7 +153,7 @@ def _format_services(counter: Counter) -> Iterable[dict]:
 
 
 def _infer_role(proto: str, port: int) -> str | None:
-    """Guess host role (dns, mail, web, …) from proto/port pairing."""
+    """Guess host role such as DNS, mail, or web from proto/port pairing."""
     if port <= 0:
         return None
     service_name = SERVICE_MAP.get((proto, port))
@@ -191,7 +191,7 @@ def run(flows_path: str, out_dir: str):
     else:
         flows_file = flows_path
     if not os.path.isfile(flows_file):
-        raise FileNotFoundError(f"Soubor s toky '{flows_file}' neexistuje.")
+        raise FileNotFoundError(f"Flow file '{flows_file}' does not exist.")
 
     hosts: Dict[str, dict] = {}
     with open(flows_file, 'r', encoding='utf-8') as fh:
@@ -257,4 +257,4 @@ def run(flows_path: str, out_dir: str):
 
     out_path = os.path.join(out_dir, 'hosts.jsonl')
     write_jsonl(out_path, host_records)
-    print(f"Inventář hostů uložen do {out_path} ({len(host_records)} záznamů).")
+    print(f"Host inventory saved to {out_path} ({len(host_records)} records).")

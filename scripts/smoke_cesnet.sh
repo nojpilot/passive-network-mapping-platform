@@ -11,17 +11,21 @@ ENR_DIR="${RUN_DIR}/enriched"
 GRAPH_DIR="${RUN_DIR}/graph"
 CRIT_DIR="${RUN_DIR}/criticality"
 EXPORT_DIR="${RUN_DIR}/report"
+PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+if [ ! -x "${PYTHON_BIN}" ]; then
+  PYTHON_BIN="python"
+fi
 
 if [ ! -f "${INPUT_CSV}" ]; then
-  echo "[cesnet] Chybí ${INPUT_CSV}"
+  echo "[cesnet] Missing ${INPUT_CSV}"
   exit 1
 fi
 
 mkdir -p "${NORM_DIR}"
 
-echo "[cesnet] Generuji flows.jsonl z ${INPUT_CSV} (syntetické IP, zachované JA3/SNI)..."
-python - <<'PY'
-import csv, json, itertools, os, random
+echo "[cesnet] Generating flows.jsonl from ${INPUT_CSV} (synthetic IPs, preserved JA3/SNI)..."
+"${PYTHON_BIN}" - <<'PY'
+import csv, json, itertools, os
 repo = os.environ.get("REPO_ROOT") or os.getcwd()
 input_csv = os.path.join(repo, "data", "cesnet-idle-os-traffic", "merged_tls.csv")
 out_path = os.path.join(repo, "data", "run", "cesnet", "normalized", "flows.jsonl")
@@ -32,7 +36,7 @@ records = []
 with open(input_csv, newline='', encoding='utf-8') as fh:
     reader = csv.DictReader(fh)
     for i, row in enumerate(reader):
-        if i >= 2000:  # větší vzorek pro report
+        if i >= 2000:  # larger sample for the report
             break
         sni = row.get('string TLS_SNI') or row.get('TLS_SNI') or ''
         ja3 = row.get('bytes TLS_JA3') or row.get('TLS_JA3') or ''
@@ -43,7 +47,7 @@ with open(input_csv, newline='', encoding='utf-8') as fh:
         rec = {
             "ts": 1729772000.0 + i,
             "src_ip": src_ip,
-            "src_port": random.randint(40000, 60000),
+            "src_port": 40000 + (i % 20000),
             "dst_ip": dst_ip,
             "dst_port": 443,
             "proto": "tcp",
@@ -60,33 +64,33 @@ os.makedirs(os.path.dirname(out_path), exist_ok=True)
 with open(out_path, "w", encoding="utf-8") as fw:
     for r in records:
         fw.write(json.dumps(r) + "\n")
-print(f"[cesnet] napsáno {len(records)} toků → {out_path}")
+print(f"[cesnet] wrote {len(records)} flows -> {out_path}")
 PY
 
 echo "[cesnet] inventory..."
-.venv/bin/python "${REPO_ROOT}/main.py" inventory --flows "${NORM_DIR}" --output "${INV_DIR}"
+"${PYTHON_BIN}" "${REPO_ROOT}/main.py" inventory --flows "${NORM_DIR}" --output "${INV_DIR}"
 
 echo "[cesnet] enrich..."
-.venv/bin/python "${REPO_ROOT}/main.py" enrich --flows "${NORM_DIR}" --output "${ENR_DIR}" --cpe-map "${REPO_ROOT}/data/cpe_map.sample.yaml"
+"${PYTHON_BIN}" "${REPO_ROOT}/main.py" enrich --flows "${NORM_DIR}" --output "${ENR_DIR}" --cpe-map "${REPO_ROOT}/data/cpe_map.sample.yaml"
 
 echo "[cesnet] analyze..."
-.venv/bin/python "${REPO_ROOT}/main.py" analyze --flows "${NORM_DIR}" --output "${GRAPH_DIR}" --hosts "${INV_DIR}/hosts.jsonl" --enriched-hosts "${ENR_DIR}/enriched_hosts.jsonl"
+"${PYTHON_BIN}" "${REPO_ROOT}/main.py" analyze --flows "${NORM_DIR}" --output "${GRAPH_DIR}" --hosts "${INV_DIR}/hosts.jsonl" --enriched-hosts "${ENR_DIR}/enriched_hosts.jsonl"
 
 echo "[cesnet] criticality..."
-.venv/bin/python "${REPO_ROOT}/main.py" criticality --graph "${GRAPH_DIR}" --output "${CRIT_DIR}" --hosts "${ENR_DIR}/enriched_hosts.jsonl" --dump-input "${CRIT_DIR}/criticality_input.json"
+"${PYTHON_BIN}" "${REPO_ROOT}/main.py" criticality --graph "${GRAPH_DIR}" --output "${CRIT_DIR}" --hosts "${ENR_DIR}/enriched_hosts.jsonl" --dump-input "${CRIT_DIR}/criticality_input.json"
 
 echo "[cesnet] export..."
-.venv/bin/python "${REPO_ROOT}/main.py" export --hosts "${INV_DIR}/hosts.jsonl" --graph "${GRAPH_DIR}/graph.json" --criticality "${CRIT_DIR}/criticality.jsonl" --output "${EXPORT_DIR}" --title "Cesnet TLS Report" --pdf --enriched "${ENR_DIR}/enriched_hosts.jsonl"
+"${PYTHON_BIN}" "${REPO_ROOT}/main.py" export --hosts "${INV_DIR}/hosts.jsonl" --graph "${GRAPH_DIR}/graph.json" --criticality "${CRIT_DIR}/criticality.jsonl" --output "${EXPORT_DIR}" --title "Cesnet TLS Report" --pdf --enriched "${ENR_DIR}/enriched_hosts.jsonl"
 
 if [ "${RUN_PROTOTYPE:-0}" = "1" ]; then
-  echo "[cesnet] Spouštím prototyp (docker)..."
+  echo "[cesnet] Running prototype (docker)..."
   if command -v docker >/dev/null 2>&1; then
     "${REPO_ROOT}/scripts/run_prototype_docker.sh"
   else
-    echo "[cesnet] Docker není k dispozici, prototyp se nespustil."
+    echo "[cesnet] Docker is not available, prototype was not started."
   fi
 else
-  echo "[cesnet] Prototyp přeskočen (nastav RUN_PROTOTYPE=1 pro spuštění)."
+  echo "[cesnet] Prototype skipped. Set RUN_PROTOTYPE=1 to run it."
 fi
 
-echo "[cesnet] Hotovo. Výstupy v ${RUN_DIR}"
+echo "[cesnet] Done. Outputs are in ${RUN_DIR}"

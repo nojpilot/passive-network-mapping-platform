@@ -7,6 +7,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from .edge_summary import edge_source_label, top_service_edges
+
 
 def _load_json(path: str) -> Dict[str, Any]:
     if not path or not os.path.isfile(path):
@@ -35,8 +37,7 @@ def _load_jsonl(path: str) -> List[Dict[str, Any]]:
 
 
 def _top_edges(graph: Dict[str, Any], k: int) -> List[Dict[str, Any]]:
-    edges = graph.get("edges") or []
-    return sorted(edges, key=lambda e: (e.get("flows", 0), e.get("bytes", 0)), reverse=True)[:k]
+    return top_service_edges(graph, k=k)
 
 
 def _shorten(text: str, max_len: int = 60) -> str:
@@ -102,11 +103,11 @@ def generate_figures(
 
     top_edges = _top_edges(graph, top_k) if graph else []
     if top_edges:
-        labels = [_shorten(f"{e.get('src','')} -> {e.get('dst','')}") for e in top_edges]
+        labels = [_shorten(f"{edge_source_label(e)} -> {e.get('dst','')}") for e in top_edges]
         flows = [int(e.get("flows", 0) or 0) for e in top_edges]
         fig, ax = plt.subplots(figsize=(11, 6))
         ax.barh(labels[::-1], flows[::-1], color="#2ca02c")
-        ax.set_title(f"Top {top_k} Edges by Flow Count")
+        ax.set_title(f"Top {top_k} Service Destinations by Flow Count")
         ax.set_xlabel("Flows")
         out_path = os.path.join(assets_dir, "top_edges_flows.png")
         _save_figure(fig, out_path)
@@ -114,8 +115,8 @@ def generate_figures(
         figures.append(
             {
                 "path": os.path.relpath(out_path, report_dir),
-                "caption": f"Top {top_k} communication edges by number of flows.",
-                "section": "Communication Edges",
+                "caption": f"Top {top_k} service destinations by aggregated number of flows.",
+                "section": "Communication Services",
             }
         )
 

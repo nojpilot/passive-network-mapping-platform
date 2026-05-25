@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Sequence
 
 import networkx as nx
 
+from .edge_summary import edge_source_label, top_service_edges
+
 
 def _load_jsonl(path: str) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
@@ -145,10 +147,7 @@ def _fingerprint_summary(enriched: List[Dict[str, Any]], k: int = 10) -> Dict[st
 
 
 def _top_edges(graph: Dict[str, Any], k: int = 10) -> List[Dict[str, Any]]:
-    edges = graph.get("edges") or []
-    if not edges:
-        return []
-    return nlargest(k, edges, key=lambda e: (e.get("flows", 0), e.get("bytes", 0)))
+    return top_service_edges(graph, k=k)
 
 
 def _shortest_paths_total(graph: nx.Graph) -> dict[str, int]:
@@ -172,7 +171,7 @@ def _shortest_paths_total(graph: nx.Graph) -> dict[str, int]:
 
 
 def _build_host_graph(graph: Dict[str, Any]) -> nx.DiGraph:
-    """Project host→service edges into a host→host dependency graph."""
+    """Project host-to-service edges into a host-to-host dependency graph."""
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or []
 
@@ -454,14 +453,18 @@ def _render_report_markdown(
         )
 
     if top_edges:
-        md_lines.append(f"## Top Communication Edges (Top {top_k})")
+        md_lines.append(f"## Top Service Destinations (Top {top_k})")
+        md_lines.append("")
+        md_lines.append(
+            "Client-to-service edges are aggregated by destination service to highlight repeated service hubs."
+        )
         md_lines.append("")
         edge_rows = []
         for idx, edge in enumerate(top_edges, start=1):
             edge_rows.append(
                 [
                     str(idx),
-                    _md_escape(edge.get("src", "")),
+                    _md_escape(edge_source_label(edge)),
                     _md_escape(edge.get("dst", "")),
                     _fmt_int(edge.get("flows", 0)),
                     _fmt_int(edge.get("bytes", 0)),
@@ -469,7 +472,7 @@ def _render_report_markdown(
             )
         _add_table(
             md_lines,
-            ["Rank", "Source", "Destination", "Flows", "Bytes"],
+            ["Rank", "Sources", "Destination Service", "Flows", "Bytes"],
             ["r", "l", "l", "r", "r"],
             edge_rows,
         )
@@ -650,8 +653,20 @@ def run(
     regenerate_figures: bool = True,
 ):
     """Generate a markdown report + JSON summary from pipeline outputs and optional figure manifest."""
+    if not os.path.isfile(hosts_path):
+        raise FileNotFoundError(f"Hosts file '{hosts_path}' does not exist.")
+    if not os.path.isfile(graph_path):
+        raise FileNotFoundError(f"Graph file '{graph_path}' does not exist.")
+
     hosts = _load_jsonl(hosts_path)
     graph = _load_json(graph_path)
+    if not graph:
+        raise ValueError(f"Graph file '{graph_path}' is empty or invalid JSON.")
+    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
+        raise ValueError(
+            f"Graph file '{graph_path}' has an invalid structure; nodes and edges must be lists."
+        )
+
     criticality = _load_jsonl(criticality_path) if criticality_path else []
     enriched = _load_jsonl(enriched_path) if enriched_path else []
 
@@ -770,12 +785,12 @@ def run(
         except subprocess.CalledProcessError as exc:
             err = (exc.stderr or "").strip()
             if err:
-                print(f"[export] Pandoc selhal: {err}")
+                print(f"[export] Pandoc failed: {err}")
             else:
-                print(f"[export] Pandoc selhal: {exc}")
+                print(f"[export] Pandoc failed: {exc}")
             pdf_path = None
 
     if pdf_path:
-        print(f"[export] Summary → {json_out}, Markdown → {report_path}, PDF → {pdf_path}")
+        print(f"[export] Summary -> {json_out}, Markdown -> {report_path}, PDF -> {pdf_path}")
     else:
-        print(f"[export] Summary → {json_out}, Markdown → {report_path}")
+        print(f"[export] Summary -> {json_out}, Markdown -> {report_path}")

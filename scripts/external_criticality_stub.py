@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Stub externího nástroje pro kritičnost.
+Stub external criticality tool.
 
-Čte payload (nodes/edges) z stdin a vypisuje JSON seznam se skóre.
-Vhodné pro otestování integrace (--external-cmd) bez skutečného nástroje.
+It reads a nodes/edges payload from stdin and prints a JSON list of scores.
+Use it to test --external-cmd integration without a real external tool.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import networkx as nx
 def main():
     try:
         payload = json.load(sys.stdin)
-    except Exception as exc:  # pragma: no cover - integrační util
+    except Exception as exc:  # pragma: no cover - integration utility
         sys.stderr.write(f"Cannot parse input JSON: {exc}\n")
         sys.exit(1)
 
