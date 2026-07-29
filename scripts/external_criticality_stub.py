@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-"""
-Stub external criticality tool.
+"""Minimal degree-based example of the external criticality JSON transport.
 
-It reads a nodes/edges payload from stdin and prints a JSON list of scores.
-Use it to test --external-cmd integration without a real external tool.
+This program is deliberately not a second implementation of the built-in
+criticality heuristic.  It projects host-to-service observations to host
+neighbours and returns normalized undirected host degree.  Its purpose is to
+demonstrate the stdin/stdout contract used by ``--external-cmd``.
 """
 
 from __future__ import annotations
@@ -11,72 +12,72 @@ from __future__ import annotations
 import json
 import sys
 from collections import defaultdict
+from typing import Any
 
-import networkx as nx
+
+def _degree_scores(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = payload.get("nodes") or []
+    edges = payload.get("edges") or []
+
+    hosts: dict[str, dict[str, Any]] = {}
+    service_owners: dict[str, str] = {}
+    for node in nodes:
+        if not isinstance(node, dict) or not node.get("id"):
+            continue
+        node_id = str(node["id"])
+        if node.get("type") == "host":
+            hosts[node_id] = node
+        elif node.get("type") == "service" and node.get("ip"):
+            service_owners[node_id] = str(node["ip"])
+
+    neighbours: dict[str, set[str]] = defaultdict(set)
+    for edge in edges:
+        if not isinstance(edge, dict) or not edge.get("src") or not edge.get("dst"):
+            continue
+        src = str(edge["src"])
+        raw_dst = str(edge["dst"])
+        dst = service_owners.get(raw_dst, raw_dst if raw_dst in hosts else "")
+        if src not in hosts or dst not in hosts or src == dst:
+            continue
+        neighbours[src].add(dst)
+        neighbours[dst].add(src)
+
+    degree = {host_id: len(neighbours[host_id]) for host_id in hosts}
+    max_degree = max(degree.values(), default=0)
+    results = []
+    for host_id in sorted(hosts):
+        value = degree[host_id]
+        roles = hosts[host_id].get("roles") or []
+        if isinstance(roles, str):
+            roles = [roles]
+        results.append(
+            {
+                "id": host_id,
+                "score": value / max_degree if max_degree else 0.0,
+                "degree": value,
+                "explanation": (
+                    "Normalized undirected host degree; transport example only"
+                ),
+                "roles": roles,
+            }
+        )
+
+    results.sort(key=lambda row: (-row["score"], row["id"]))
+    return results
 
 
-def main():
+def main() -> None:
     try:
         payload = json.load(sys.stdin)
-    except Exception as exc:  # pragma: no cover - integration utility
+    except Exception as exc:  # pragma: no cover - command-line error path
         sys.stderr.write(f"Cannot parse input JSON: {exc}\n")
-        sys.exit(1)
+        raise SystemExit(1) from exc
 
-    nodes = payload.get('nodes') or []
-    edges = payload.get('edges') or []
+    if not isinstance(payload, dict):
+        sys.stderr.write("Input JSON must be an object.\n")
+        raise SystemExit(1)
 
-    G = nx.DiGraph()
-    for node in nodes:
-        if not isinstance(node, dict) or 'id' not in node:
-            continue
-        G.add_node(node['id'], **node)
-    for edge in edges:
-        if not isinstance(edge, dict) or 'src' not in edge or 'dst' not in edge:
-            continue
-        G.add_edge(edge['src'], edge['dst'], **edge)
-
-    betweenness: dict[str, float] = {}
-    if G.number_of_nodes():
-        k = None
-        if G.number_of_nodes() > 2000:
-            k = min(256, G.number_of_nodes())
-        betweenness = nx.betweenness_centrality(G, weight='bytes', normalized=True, k=k, seed=42 if k else None)
-    degree = dict(G.degree())
-    bytes_totals: dict[str, int] = defaultdict(int)
-    for u, v, data in G.edges(data=True):
-        bytes_totals[u] += data.get('bytes', 0) or 0
-        bytes_totals[v] += data.get('bytes', 0) or 0
-
-    max_betw = max(betweenness.values(), default=0.0)
-    max_deg = max(degree.values(), default=0.0)
-    max_bytes = max(bytes_totals.values(), default=0.0)
-
-    results = []
-    for node_id, attrs in G.nodes(data=True):
-        if attrs.get('type') and attrs.get('type') != 'host':
-            continue
-        score = (
-            0.6 * (betweenness.get(node_id, 0.0) / max_betw if max_betw else 0.0)
-            + 0.2 * (degree.get(node_id, 0) / max_deg if max_deg else 0.0)
-            + 0.2 * (bytes_totals.get(node_id, 0) / max_bytes if max_bytes else 0.0)
-        )
-        roles = attrs.get('roles') or []
-        explanation_parts = [
-            f"betw={betweenness.get(node_id, 0.0):.4f}",
-            f"deg={degree.get(node_id, 0)}",
-            f"bytes={bytes_totals.get(node_id, 0)}",
-        ]
-        if roles:
-            explanation_parts.append(f"roles={','.join(roles)}")
-        results.append({
-            'id': node_id,
-            'score': round(score, 6),
-            'explanation': "; ".join(explanation_parts),
-            'roles': roles,
-        })
-
-    results.sort(key=lambda r: r['score'], reverse=True)
-    json.dump(results, sys.stdout, ensure_ascii=False, indent=2)
+    json.dump(_degree_scores(payload), sys.stdout, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

@@ -13,15 +13,29 @@ def _load_yaml_safe(path: str):
         return {}
 
 class NetFilter:
-    def __init__(self, include_cidrs=None, exclude_cidrs=None, drop_outside=False):
+    def __init__(self, include_cidrs=None, exclude_cidrs=None, drop_outside=None):
         cfg = _load_yaml_safe('config.yaml') or {}
         network_cfg = cfg.get('network') or {}
         filters_cfg = cfg.get('filters') or {}
-        include = include_cidrs if include_cidrs else network_cfg.get('include_cidrs', [])
-        exclude = exclude_cidrs if exclude_cidrs else network_cfg.get('exclude_cidrs', [])
+        # ``None`` means "use configuration defaults"; an explicit empty
+        # sequence means "no range constraint". This distinction keeps a
+        # one-command run manifest faithful to the parameters actually used.
+        include = include_cidrs if include_cidrs is not None else network_cfg.get('include_cidrs', [])
+        exclude = exclude_cidrs if exclude_cidrs is not None else network_cfg.get('exclude_cidrs', [])
         self.include = [ip_network(c) for c in include]
         self.exclude = [ip_network(c) for c in exclude]
-        self.drop_outside = drop_outside or filters_cfg.get('drop_outside_ranges', False)
+        self.drop_outside = (
+            bool(filters_cfg.get('drop_outside_ranges', False))
+            if drop_outside is None
+            else bool(drop_outside)
+        )
+
+    def is_excluded(self, ip: str) -> bool:
+        try:
+            addr = ip_address(ip)
+        except Exception:
+            return False
+        return bool(self.exclude and any(addr in network for network in self.exclude))
 
     def in_ranges(self, ip: str) -> bool:
         # True means the address is allowed; false means it can be dropped.
@@ -29,7 +43,7 @@ class NetFilter:
             addr = ip_address(ip)
         except Exception:
             return False
-        if self.exclude and any(addr in n for n in self.exclude):
+        if self.is_excluded(ip):
             return False
         if self.include:
             inside = any(addr in n for n in self.include)
@@ -64,7 +78,7 @@ def iter_nfdump_json(input_dir: str):
         if os.path.basename(path) == 'flows.jsonl':
             continue
 
-        # Prefer streamed JSON Lines for larger files, for example Cyber Czech.
+        # Prefer streamed JSON Lines for larger files.
         size_bytes = 0
         try:
             size_bytes = os.path.getsize(path)

@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Iterable
 
 from . import pipeline
-from .notebook_common import display_table, ensure_exists, read_jsonl
+from .notebook_common import (
+    display_table,
+    ensure_exists,
+    read_jsonl,
+    report_pdf_message,
+)
 
 
 def _load_widgets():
@@ -305,21 +310,37 @@ def create_inventory_controls(run_dir: str | Path):
         hosts = _as_path(output_dir.value) / "hosts.jsonl"
         ensure_exists(hosts, "Inventory hosts")
         rows = read_jsonl(hosts)
+        display_rows = [
+            rec for rec in rows if rec.get("in_scope") is not False
+        ]
         role_counter = Counter()
 
-        for rec in rows:
-            rec["bytes_total"] = int(rec.get("bytes_in", 0) or 0) + int(rec.get("bytes_out", 0) or 0)
+        for rec in display_rows:
+            if rec.get("bytes_observed") is not None:
+                rec["bytes_total"] = int(rec.get("bytes_observed") or 0)
+            else:
+                rec["bytes_total"] = int(rec.get("bytes_in", 0) or 0) + int(rec.get("bytes_out", 0) or 0)
             rec["flows_total"] = int(rec.get("flows_in", 0) or 0) + int(rec.get("flows_out", 0) or 0)
             rec["roles_joined"] = ",".join(rec.get("roles", [])) or "unknown"
             for role in rec.get("roles") or ["unknown"]:
                 role_counter[str(role)] += 1
 
         print("Total hosts:", len(rows))
-        rows_sorted = sorted(rows, key=lambda r: r["bytes_total"], reverse=True)
+        print("Hosts in scoped preview:", len(display_rows))
+        has_measured_bytes = any(rec["bytes_total"] for rec in display_rows)
+        rows_sorted = sorted(
+            display_rows,
+            key=lambda rec: (
+                rec["bytes_total"] if has_measured_bytes else rec["flows_total"],
+                rec["flows_total"],
+                rec.get("ip", ""),
+            ),
+            reverse=True,
+        )
         display_table(
             rows_sorted,
             [("ip", "ip"), ("roles", "roles_joined"), ("bytes_total", "bytes_total"), ("flows_total", "flows_total")],
-            "Top Hosts by Traffic",
+            "Top In-Scope Hosts by Traffic",
             limit=top_n.value,
         )
         role_rows = [{"role": k, "hosts": v} for k, v in role_counter.most_common(top_n.value)]
@@ -328,11 +349,13 @@ def create_inventory_controls(run_dir: str | Path):
         if rows_sorted:
             subset = rows_sorted[:top_n.value]
             labels = [item.get("ip", "") for item in subset]
-            values = [item.get("bytes_total", 0) for item in subset]
+            metric = "bytes_total" if has_measured_bytes else "flows_total"
+            values = [item.get(metric, 0) for item in subset]
             fig, ax = plt.subplots(figsize=(9, 4))
             ax.bar(labels, values, color="#2ca02c")
-            ax.set_title(f"Top Hosts by Bytes (Top {top_n.value})")
-            ax.set_ylabel("Bytes")
+            label = "Observed Bytes" if has_measured_bytes else "Flows"
+            ax.set_title(f"Top In-Scope Hosts by {label} (Top {top_n.value})")
+            ax.set_ylabel(label)
             ax.tick_params(axis="x", rotation=30)
             plt.show()
 
@@ -745,8 +768,12 @@ def create_criticality_controls(run_dir: str | Path):
             print("manifest:", manifest)
         print("report:", _as_path(report_dir.value) / "report.md")
         print("summary:", _as_path(report_dir.value) / "summary.json")
-        if pdf.value:
-            print("pdf:", _as_path(report_dir.value) / "report.pdf")
+        print(
+            report_pdf_message(
+                _as_path(report_dir.value) / "report.pdf",
+                requested=bool(pdf.value),
+            )
+        )
 
     def _exec(action):
         with output:

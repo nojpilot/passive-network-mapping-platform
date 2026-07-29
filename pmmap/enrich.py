@@ -7,9 +7,10 @@ import shutil
 import subprocess
 import tempfile
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from typing import Iterable, Sequence
 
-from .cpe import CPEMapper, map_host_fingerprints
+from .cpe import CPEMapper, SUPPORTED_CPE_SECTIONS, map_host_fingerprints
 from .utils import write_jsonl
 
 
@@ -144,6 +145,14 @@ def _format_counter(counter: Counter) -> list[dict]:
     return [{'value': val, 'count': count} for val, count in counter.most_common()]
 
 
+def _write_manifest(path: str, payload: dict) -> None:
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    os.replace(temporary, path)
+
+
 def run(
     flows_path: str,
     out_dir: str,
@@ -156,23 +165,19 @@ def run(
         'ja3': Counter(),
         'ja3s': Counter(),
         'hassh': Counter(),
+        'hassh_server': Counter(),
         'sni_served': Counter(),
         'sni_used': Counter(),
         'dns_queries': Counter(),
         'os': Counter(),
+        'scope_values': set(),
     })
 
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    cpe_candidates = [
-        cpe_map_path,
-        os.environ.get('PMMAP_CPE_MAP'),
-        os.path.join(repo_root, 'data', 'cpe_map.yaml'),
-        os.path.join(repo_root, 'data', 'cpe_map.sample.yaml'),
-    ]
-    resolved_cpe_map = next((p for p in cpe_candidates if p and os.path.isfile(p)), None)
-    cpe_mapper = CPEMapper.from_file(resolved_cpe_map)
-    if resolved_cpe_map:
-        print(f"[enrich] Using CPE mapping: {resolved_cpe_map}")
+    # CPE inference is strictly opt-in through this explicit function argument.
+    # Environment variables and bundled examples are never loaded implicitly.
+    cpe_mapper = CPEMapper.from_file(cpe_map_path) if cpe_map_path else None
+    if cpe_mapper:
+        print(f"[enrich] Using CPE mapping: {cpe_mapper.source}")
 
     for rec in _load_flows(flows_path):
         src_ip = rec.get('src_ip')
@@ -180,19 +185,26 @@ def run(
         ja3 = rec.get('ja3')
         ja3s = rec.get('ja3s')
         hassh = rec.get('hassh')
+        hassh_server = rec.get('hassh_server')
         sni = rec.get('sni')
         dns_qname = rec.get('dns_qname')
 
         if src_ip:
             hosts[src_ip]
+            if isinstance(rec.get('src_in_scope'), bool):
+                hosts[src_ip]['scope_values'].add(rec['src_in_scope'])
         if dst_ip:
             hosts[dst_ip]
+            if isinstance(rec.get('dst_in_scope'), bool):
+                hosts[dst_ip]['scope_values'].add(rec['dst_in_scope'])
         if src_ip and ja3:
             _add_value(hosts[src_ip]['ja3'], ja3)
         if dst_ip and ja3s:
             _add_value(hosts[dst_ip]['ja3s'], ja3s)
         if src_ip and hassh:
             _add_value(hosts[src_ip]['hassh'], hassh)
+        if dst_ip and hassh_server:
+            _add_value(hosts[dst_ip]['hassh_server'], hassh_server)
         if dst_ip and sni:
             _add_value(hosts[dst_ip]['sni_served'], sni)
         if src_ip and sni:
@@ -209,15 +221,26 @@ def run(
 
     os.makedirs(out_dir, exist_ok=True)
     records = []
+    hosts_with_cpe = 0
+    hypotheses_by_source: Counter = Counter()
+    matched_evidence_values: set[tuple[str, str]] = set()
     for ip, data in sorted(hosts.items(), key=lambda item: item[0]):
         record = {
             'ip': ip,
             'client_ja3': _format_counter(data['ja3']),
             'server_ja3s': _format_counter(data['ja3s']),
             'hassh': _format_counter(data['hassh']),
+            'server_hassh': _format_counter(data['hassh_server']),
             'sni_served': _format_counter(data['sni_served']),
             'sni_used': _format_counter(data['sni_used']),
             'dns_queries': _format_counter(data['dns_queries']),
+            'in_scope': (
+                True
+                if True in data['scope_values']
+                else False
+                if False in data['scope_values']
+                else None
+            ),
         }
         if data['os']:
             record['os_guesses'] = _format_counter(data['os'])
@@ -226,12 +249,53 @@ def run(
             ja3=data['ja3'].keys(),
             ja3s=data['ja3s'].keys(),
             hassh=data['hassh'].keys(),
-            sni_values=set(list(data['sni_served'].keys()) + list(data['sni_used'].keys())),
+            hassh_server=data['hassh_server'].keys(),
         ) if cpe_mapper else []
         if cpe_entries:
             record['cpe'] = cpe_entries
+            hosts_with_cpe += 1
+            for entry in cpe_entries:
+                source = str(entry.get("source", ""))
+                evidence = str(entry.get("evidence", ""))
+                hypotheses_by_source[source] += 1
+                matched_evidence_values.add((source, evidence))
         records.append(record)
 
     out_path = os.path.join(out_dir, 'enriched_hosts.jsonl')
     write_jsonl(out_path, records)
+    mapping_entries = {
+        section: len(cpe_mapper.mapping.get(section, {}))
+        for section in SUPPORTED_CPE_SECTIONS
+        if cpe_mapper and section in cpe_mapper.mapping
+    }
+    manifest = {
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "input": {
+            "flows_path": os.path.realpath(os.path.abspath(flows_path)),
+            "pcap_files": [os.path.realpath(path) for path in pcap_list],
+        },
+        "cpe_mapping": {
+            "enabled": cpe_mapper is not None,
+            "path": cpe_mapper.source if cpe_mapper else None,
+            "sha256": cpe_mapper.source_sha256 if cpe_mapper else None,
+            "entries_by_section": mapping_entries,
+        },
+        "matches": {
+            "hosts_with_hypotheses": hosts_with_cpe,
+            "hypotheses_emitted": sum(hypotheses_by_source.values()),
+            "unique_evidence_values_matched": len(matched_evidence_values),
+            "hypotheses_by_source": {
+                section: int(hypotheses_by_source[section])
+                for section in SUPPORTED_CPE_SECTIONS
+            },
+        },
+        "output": {
+            "enriched_hosts_path": os.path.realpath(out_path),
+            "hosts": len(records),
+        },
+    }
+    manifest_path = os.path.join(out_dir, "enrichment_manifest.json")
+    _write_manifest(manifest_path, manifest)
     print(f"[enrich] Wrote {len(records)} records -> {out_path}")
+    print(f"[enrich] Manifest -> {manifest_path}")

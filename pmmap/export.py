@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Sequence
 import networkx as nx
 
 from .edge_summary import edge_source_label, top_service_edges
+from .centrality import plan_betweenness
+from .graph_projection import build_host_graph
 
 
 def _load_jsonl(path: str) -> List[Dict[str, Any]]:
@@ -41,22 +43,61 @@ def _load_json(path: str) -> Dict[str, Any]:
             return {}
 
 
-def _load_figures_manifest(path: str | None, out_dir: str) -> List[Dict[str, str]]:
-    candidates: List[str] = []
-    if path:
-        candidates.append(path)
-    candidates.append(os.path.join(out_dir, "figures_manifest.json"))
+def _host_id(record: Dict[str, Any]) -> str | None:
+    value = record.get("ip") or record.get("id")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
-    selected = None
-    for candidate in candidates:
-        if candidate and os.path.isfile(candidate):
-            selected = candidate
-            break
-    if not selected:
+
+def _scope_status_by_host(
+    graph: Dict[str, Any],
+    hosts: List[Dict[str, Any]],
+    criticality: List[Dict[str, Any]] | None = None,
+) -> Dict[str, bool | None]:
+    """Merge host scope markers, with any explicit ``False`` taking priority."""
+    status: Dict[str, bool | None] = {}
+
+    graph_hosts = [
+        node
+        for node in (graph.get("nodes") or [])
+        if isinstance(node, dict) and node.get("type") == "host"
+    ]
+    for record in [*graph_hosts, *hosts, *(criticality or [])]:
+        host_id = _host_id(record)
+        if not host_id:
+            continue
+        status.setdefault(host_id, None)
+        marker = record.get("in_scope")
+        if marker is False:
+            status[host_id] = False
+        elif marker is True and status[host_id] is not False:
+            status[host_id] = True
+    return status
+
+
+def _observed_bytes(host: Dict[str, Any]) -> int:
+    """Return the canonical per-host traffic total."""
+    if host.get("bytes_observed") is not None:
+        return _as_int(host.get("bytes_observed"))
+    # Backward-compatible fallback for inventory artifacts created before
+    # bytes_observed was introduced.
+    return _as_int(host.get("bytes_in")) + _as_int(host.get("bytes_out"))
+
+
+def _portable_relative_path(path: str, start: str) -> str:
+    """Return a relative path using POSIX separators for portable artifacts."""
+    return os.path.relpath(path, start).replace("\\", "/")
+
+
+def _load_figures_manifest(path: str | None, out_dir: str) -> List[Dict[str, str]]:
+    """Load exactly the requested manifest without implicit stale fallback."""
+    if not path or not os.path.isfile(path):
         return []
 
     try:
-        with open(selected, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return []
@@ -85,7 +126,10 @@ def _load_figures_manifest(path: str | None, out_dir: str) -> List[Dict[str, str
             section = "Vizualizace"
         # Keep paths relative to report output dir for portable markdown/PDF export.
         if os.path.isabs(fig_path):
-            fig_path = os.path.relpath(fig_path, out_dir)
+            fig_path = _portable_relative_path(fig_path, out_dir)
+        else:
+            # A manifest produced on Windows may later be consumed elsewhere.
+            fig_path = fig_path.replace("\\", "/")
         figures.append(
             {
                 "path": fig_path,
@@ -97,9 +141,10 @@ def _load_figures_manifest(path: str | None, out_dir: str) -> List[Dict[str, str
 
 
 def _top_critical(crit: List[Dict[str, Any]], k: int = 10) -> List[Dict[str, Any]]:
-    if not crit:
+    eligible = [record for record in crit if record.get("in_scope") is not False]
+    if not eligible:
         return []
-    return nlargest(k, crit, key=lambda rec: _as_float(rec.get("score", 0.0)))
+    return nlargest(k, eligible, key=lambda rec: _as_float(rec.get("score", 0.0)))
 
 
 def _fingerprint_summary(enriched: List[Dict[str, Any]], k: int = 10) -> Dict[str, List[tuple[str, int]]]:
@@ -107,16 +152,19 @@ def _fingerprint_summary(enriched: List[Dict[str, Any]], k: int = 10) -> Dict[st
 
     ja3 = Counter()
     ja3s = Counter()
-    hassh = Counter()
-    sni = Counter()
-    cpe = Counter()
+    hassh_client = Counter()
+    hassh_server = Counter()
+    sni_requested = Counter()
+    sni_served = Counter()
+    cpe_hosts = Counter()
     for rec in enriched:
         for key, ctr in (
             ("client_ja3", ja3),
             ("server_ja3s", ja3s),
-            ("hassh", hassh),
-            ("sni_served", sni),
-            ("sni_used", sni),
+            ("hassh", hassh_client),
+            ("server_hassh", hassh_server),
+            ("sni_used", sni_requested),
+            ("sni_served", sni_served),
         ):
             values = rec.get(key) or []
             for item in values:
@@ -128,21 +176,28 @@ def _fingerprint_summary(enriched: List[Dict[str, Any]], k: int = 10) -> Dict[st
                     cnt = 1
                 if val:
                     ctr[val] += cnt
+        host_cpe_values: set[str] = set()
         for entry in rec.get("cpe") or []:
             if isinstance(entry, dict):
                 val = entry.get("cpe")
             else:
                 val = entry
             if val:
-                cpe[val] += 1
+                host_cpe_values.add(str(val))
+        for value in host_cpe_values:
+            cpe_hosts[value] += 1
+
     def top(counter: Counter):
         return counter.most_common(k)
+
     return {
         "ja3": top(ja3),
         "ja3s": top(ja3s),
-        "hassh": top(hassh),
-        "sni": top(sni),
-        "cpe": top(cpe),
+        "hassh_client": top(hassh_client),
+        "hassh_server": top(hassh_server),
+        "sni_requested": top(sni_requested),
+        "sni_served": top(sni_served),
+        "cpe_host_hypotheses": top(cpe_hosts),
     }
 
 
@@ -170,52 +225,36 @@ def _shortest_paths_total(graph: nx.Graph) -> dict[str, int]:
     return totals
 
 
-def _build_host_graph(graph: Dict[str, Any]) -> nx.DiGraph:
-    """Project host-to-service edges into a host-to-host dependency graph."""
-    nodes = graph.get("nodes") or []
-    edges = graph.get("edges") or []
-
-    host_nodes = {n.get("id") for n in nodes if n.get("type") == "host" and n.get("id")}
-    service_nodes = {n.get("id"): n for n in nodes if n.get("type") == "service" and n.get("id")}
-
-    G = nx.DiGraph()
-    for host_id in host_nodes:
-        G.add_node(host_id)
-
-    for edge in edges:
-        src = edge.get("src")
-        svc_id = edge.get("dst")
-        svc = service_nodes.get(svc_id)
-        if not src or not svc:
-            continue
-        dst = svc.get("ip")
-        if not dst:
-            continue
-        flows = int(edge.get("flows", 0) or 0)
-        bytes_val = int(edge.get("bytes", 0) or 0)
-        if not G.has_node(src):
-            G.add_node(src)
-        if not G.has_node(dst):
-            G.add_node(dst)
-        if G.has_edge(src, dst):
-            G[src][dst]["flows"] += flows
-            G[src][dst]["bytes"] += bytes_val
-        else:
-            G.add_edge(src, dst, flows=flows, bytes=bytes_val)
-    return G
-
-
 def _host_metrics(
     graph: Dict[str, Any],
     hosts: List[Dict[str, Any]],
     criticality: List[Dict[str, Any]],
+    excluded_host_ids: set[str] | None = None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Compute per-host metrics for reporting."""
-    host_graph = _build_host_graph(graph)
+    host_graph = build_host_graph(
+        graph.get("nodes") or [],
+        graph.get("edges") or [],
+    )
+    excluded = set(excluded_host_ids or ())
+    excluded.update(
+        str(node_id)
+        for node_id, attrs in host_graph.nodes(data=True)
+        if attrs.get("in_scope") is False
+    )
+    excluded.update(
+        str(host.get("ip"))
+        for host in hosts
+        if host.get("ip") and host.get("in_scope") is False
+    )
+    removed_host_ids = excluded.intersection(str(node_id) for node_id in host_graph.nodes())
+    host_graph.remove_nodes_from(removed_host_ids)
     n_nodes = host_graph.number_of_nodes()
     meta = {
         "nodes": n_nodes,
+        "excluded_out_of_scope_hosts": len(removed_host_ids),
         "betweenness_sample_k": None,
+        "betweenness_mode": "skipped",
         "betweenness_computed": False,
         "closeness_computed": False,
         "shortest_paths_computed": False,
@@ -234,21 +273,24 @@ def _host_metrics(
     # Centrality metrics on undirected projection for stability.
     ug = host_graph.to_undirected()
     betweenness: Dict[str, float] = {node_id: 0.0 for node_id in ug.nodes()}
-    betw_k = None
-    if ug.number_of_nodes() <= 2000:
-        betw_k = None
-    elif ug.number_of_nodes() <= 10000:
-        betw_k = min(64, ug.number_of_nodes())
-    else:
-        meta["betweenness_skipped_reason"] = "graph_too_large"
+    betweenness_plan = plan_betweenness(
+        ug.number_of_nodes(),
+        ug.number_of_edges(),
+    )
+    meta["betweenness_mode"] = betweenness_plan["mode"]
+    meta["betweenness_plan"] = betweenness_plan
+    if betweenness_plan["skipped_reason"]:
+        meta["betweenness_skipped_reason"] = betweenness_plan["skipped_reason"]
 
-    if "betweenness_skipped_reason" not in meta:
+    if betweenness_plan["mode"] != "skipped":
+        betw_k = betweenness_plan["sample_k"]
         meta["betweenness_sample_k"] = betw_k
         betweenness = nx.betweenness_centrality(
             ug,
             normalized=True,
+            weight=None,
             k=betw_k,
-            seed=42 if betw_k else None,
+            seed=betweenness_plan["sample_seed"] if betw_k else None,
         )
         meta["betweenness_computed"] = True
 
@@ -267,6 +309,7 @@ def _host_metrics(
         host = host_lookup.get(node_id, {})
         bytes_in = int(host.get("bytes_in", 0) or 0)
         bytes_out = int(host.get("bytes_out", 0) or 0)
+        bytes_observed = _observed_bytes(host)
         flows_in = int(host.get("flows_in", 0) or 0)
         flows_out = int(host.get("flows_out", 0) or 0)
         metrics.append(
@@ -277,7 +320,8 @@ def _host_metrics(
                 "out_degree": int(out_degree.get(node_id, 0)),
                 "bytes_in": bytes_in,
                 "bytes_out": bytes_out,
-                "bytes_total": bytes_in + bytes_out,
+                "bytes_observed": bytes_observed,
+                "bytes_total": bytes_observed,
                 "flows_in": flows_in,
                 "flows_out": flows_out,
                 "flows_total": flows_in + flows_out,
@@ -300,6 +344,18 @@ def _top_items(metrics: List[Dict[str, Any]], key: str, k: int = 10) -> List[Dic
         return value
 
     return sorted(metrics, key=_val, reverse=True)[:k]
+
+
+def _top_positive_items(
+    metrics: List[Dict[str, Any]],
+    key: str,
+    k: int = 10,
+) -> List[Dict[str, Any]]:
+    """Return leaders only when the selected metric contains information."""
+    leaders = _top_items(metrics, key, k=k)
+    if not leaders or not any(_as_float(record.get(key)) for record in leaders):
+        return []
+    return leaders
 
 
 def _format_metric_value(key: str, value: Any) -> str:
@@ -376,6 +432,7 @@ def _render_report_markdown(
     fp_summary: Dict[str, List[tuple[str, int]]],
     figures: List[Dict[str, str]],
     pdf_enabled: bool,
+    figures_manifest_label: str | None = None,
 ) -> List[str]:
     md_lines: List[str] = []
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -388,7 +445,10 @@ def _render_report_markdown(
     md_lines.append("## Executive Summary")
     md_lines.append("")
     summary_rows = [
-        ["Hosts", _fmt_int(stats.get("hosts", 0))],
+        ["Hosts (total)", _fmt_int(stats.get("hosts", 0))],
+        ["Hosts (in scope)", _fmt_int(stats.get("hosts_in_scope", 0))],
+        ["Hosts (external)", _fmt_int(stats.get("hosts_external", 0))],
+        ["Hosts (scope unknown)", _fmt_int(stats.get("hosts_scope_unknown", 0))],
         ["Services", _fmt_int(stats.get("services", 0))],
         ["Communication edges", _fmt_int(stats.get("edges", 0))],
         ["Criticality rows", _fmt_int(len(criticality))],
@@ -420,13 +480,26 @@ def _render_report_markdown(
     if hosts:
         md_lines.append(f"## Host Inventory Snapshot (Top {top_k})")
         md_lines.append("")
-        md_lines.append("Hosts are ranked by total traffic volume (`bytes_in + bytes_out`).")
+        has_measured_bytes = any(_observed_bytes(host) for host in hosts)
+        if has_measured_bytes:
+            md_lines.append(
+                "Hosts are ranked by canonical observed traffic volume (`bytes_observed`)."
+            )
+        else:
+            md_lines.append(
+                "Measured byte volume is unavailable; hosts are ranked by observed flow count."
+            )
         md_lines.append("")
         ranked_hosts = sorted(
             hosts,
             key=lambda h: (
-                _as_int(h.get("bytes_in", 0)) + _as_int(h.get("bytes_out", 0)),
+                (
+                    _observed_bytes(h)
+                    if has_measured_bytes
+                    else _as_int(h.get("flows_in", 0)) + _as_int(h.get("flows_out", 0))
+                ),
                 _as_int(h.get("flows_in", 0)) + _as_int(h.get("flows_out", 0)),
+                str(h.get("ip", "")),
             ),
             reverse=True,
         )[:top_k]
@@ -439,16 +512,15 @@ def _render_report_markdown(
                     str(idx),
                     _md_escape(host.get("ip", "")),
                     _md_escape(roles),
-                    _fmt_int(host.get("bytes_in", 0)),
-                    _fmt_int(host.get("bytes_out", 0)),
+                    _fmt_int(_observed_bytes(host)),
                     _fmt_int(host.get("flows_in", 0)),
                     _fmt_int(host.get("flows_out", 0)),
                 ]
             )
         _add_table(
             md_lines,
-            ["Rank", "Host IP", "Roles", "Bytes In", "Bytes Out", "Flows In", "Flows Out"],
-            ["r", "l", "l", "r", "r", "r", "r"],
+            ["Rank", "Host IP", "Roles", "Bytes Observed", "Flows In", "Flows Out"],
+            ["r", "l", "l", "r", "r", "r"],
             host_rows,
         )
 
@@ -492,7 +564,13 @@ def _render_report_markdown(
             else:
                 notes_rows.append(["Betweenness", "Exact"])
         else:
-            notes_rows.append(["Betweenness", "Skipped (graph too large)"])
+            skipped_reason = host_meta.get(
+                "betweenness_skipped_reason",
+                "resource policy",
+            )
+            notes_rows.append(
+                ["Betweenness", f"Skipped ({skipped_reason.replace('_', ' ')})"]
+            )
         notes_rows.append(
             [
                 "Closeness",
@@ -538,7 +616,7 @@ def _render_report_markdown(
                 "Degree",
                 "In",
                 "Out",
-                "Bytes",
+                "Observed Bytes",
                 "Flows",
                 "Betweenness",
                 "Closeness",
@@ -554,12 +632,12 @@ def _render_report_markdown(
         for table_title, key in (
             ("Degree", "degree"),
             ("Betweenness", "betweenness"),
-            ("Traffic Bytes", "bytes_total"),
+            ("Observed Traffic Bytes", "bytes_total"),
             ("Traffic Flows", "flows_total"),
             ("Shortest-path Counts", "shortest_paths_total"),
         ):
             leaders = _top_items(host_metrics, key, k=top_k)
-            if not leaders:
+            if not leaders or not any(_as_float(item.get(key)) for item in leaders):
                 continue
             md_lines.append(f"#### Top {top_k} by {table_title}")
             md_lines.append("")
@@ -580,12 +658,20 @@ def _render_report_markdown(
     if fp_summary:
         md_lines.append(f"## Fingerprint and CPE Summary (Top {top_k})")
         md_lines.append("")
+        md_lines.append(
+            "Requested and served SNI observations are reported separately. "
+            "CPE values are fingerprint-derived host hypotheses; their count is "
+            "the number of distinct hosts carrying each hypothesis."
+        )
+        md_lines.append("")
         fp_groups = (
-            ("SNI", fp_summary.get("sni") or []),
+            ("SNI Requested", fp_summary.get("sni_requested") or []),
+            ("SNI Served", fp_summary.get("sni_served") or []),
             ("JA3", fp_summary.get("ja3") or []),
             ("JA3S", fp_summary.get("ja3s") or []),
-            ("HASSH", fp_summary.get("hassh") or []),
-            ("CPE", fp_summary.get("cpe") or []),
+            ("HASSH Client", fp_summary.get("hassh_client") or []),
+            ("HASSH Server", fp_summary.get("hassh_server") or []),
+            ("CPE Host Hypotheses", fp_summary.get("cpe_host_hypotheses") or []),
         )
         has_fp_data = any(items for _, items in fp_groups)
         if not has_fp_data:
@@ -633,8 +719,10 @@ def _render_report_markdown(
         artifact_rows.append(["PDF Report", "`report.pdf`"])
     if host_metrics:
         artifact_rows.append(["Host Metrics", "`host_metrics.jsonl`"])
-    if figures:
-        artifact_rows.append(["Figures Manifest", "`figures_manifest.json`"])
+    if figures_manifest_label:
+        artifact_rows.append(
+            ["Figures Manifest", f"`{_md_escape(figures_manifest_label)}`"]
+        )
     _add_table(md_lines, ["Artifact", "Path"], ["l", "l"], artifact_rows)
 
     return md_lines
@@ -658,7 +746,7 @@ def run(
     if not os.path.isfile(graph_path):
         raise FileNotFoundError(f"Graph file '{graph_path}' does not exist.")
 
-    hosts = _load_jsonl(hosts_path)
+    all_hosts = _load_jsonl(hosts_path)
     graph = _load_json(graph_path)
     if not graph:
         raise ValueError(f"Graph file '{graph_path}' is empty or invalid JSON.")
@@ -667,13 +755,52 @@ def run(
             f"Graph file '{graph_path}' has an invalid structure; nodes and edges must be lists."
         )
 
-    criticality = _load_jsonl(criticality_path) if criticality_path else []
+    all_criticality = _load_jsonl(criticality_path) if criticality_path else []
     enriched = _load_jsonl(enriched_path) if enriched_path else []
+    scope_status = _scope_status_by_host(graph, all_hosts, all_criticality)
+    excluded_host_ids = {
+        host_id for host_id, in_scope in scope_status.items() if in_scope is False
+    }
+    hosts = [
+        host
+        for host in all_hosts
+        if _host_id(host) not in excluded_host_ids
+        and host.get("in_scope") is not False
+    ]
+    criticality = [
+        record
+        for record in all_criticality
+        if _host_id(record) not in excluded_host_ids
+        and record.get("in_scope") is not False
+    ]
 
     os.makedirs(out_dir, exist_ok=True)
+    # Never leave a PDF from an earlier run masquerading as current output.
+    # A fresh PDF is created below only when explicitly requested and Pandoc
+    # succeeds.
+    stale_pdf_path = os.path.join(out_dir, "report.pdf")
+    if os.path.isfile(stale_pdf_path):
+        os.remove(stale_pdf_path)
     top_k = max(1, int(top_k))
-    figures = _load_figures_manifest(figures_manifest_path, out_dir)
-    if graph and regenerate_figures:
+    default_manifest_path = os.path.join(out_dir, "figures_manifest.json")
+    figures: List[Dict[str, str]] = []
+    manifest_path_used: str | None = None
+    if figures_manifest_path:
+        # An explicit manifest is user-owned input. It is authoritative and
+        # must never be overwritten by automatic chart generation.
+        figures = _load_figures_manifest(figures_manifest_path, out_dir)
+        if os.path.isfile(figures_manifest_path):
+            manifest_path_used = figures_manifest_path
+        if regenerate_figures:
+            print(
+                "[export] Explicit figure manifest supplied; "
+                "automatic figure regeneration was skipped."
+            )
+    elif graph and regenerate_figures:
+        # Remove the previous generated manifest before trying a new run. If
+        # chart generation fails, the report must not silently reuse it.
+        if os.path.isfile(default_manifest_path):
+            os.remove(default_manifest_path)
         try:
             from .report_figures import generate_figures
 
@@ -683,32 +810,67 @@ def run(
                 criticality_path=criticality_path,
                 hosts_path=hosts_path if os.path.isfile(hosts_path) else None,
                 top_k=top_k,
-                manifest_path=figures_manifest_path,
+                manifest_path=None,
             )
-            refreshed = _load_figures_manifest(manifest_path, out_dir)
-            if refreshed:
-                figures = refreshed
-                print(f"[export] Generated {len(figures)} figures for the report.")
+            figures = _load_figures_manifest(manifest_path, out_dir)
+            if os.path.isfile(manifest_path):
+                manifest_path_used = manifest_path
+            print(f"[export] Generated {len(figures)} figures for the report.")
         except Exception as exc:
-            if figures:
-                print(f"[export] Figure generation failed; using existing manifest. Reason: {exc}")
-            else:
-                print(f"[export] Figure generation failed: {exc}")
+            figures = []
+            manifest_path_used = None
+            if os.path.isfile(default_manifest_path):
+                os.remove(default_manifest_path)
+            print(f"[export] Figure generation failed: {exc}")
+    elif not regenerate_figures and os.path.isfile(default_manifest_path):
+        # Reuse of the default generated manifest is opt-in through
+        # regenerate_figures=False.
+        figures = _load_figures_manifest(default_manifest_path, out_dir)
+        manifest_path_used = default_manifest_path
+
+    graph_host_ids = {
+        str(node.get("id"))
+        for node in (graph.get("nodes") or [])
+        if isinstance(node, dict) and node.get("type") == "host" and node.get("id")
+    }
+    hosts_in_scope = sum(
+        scope_status.get(host_id) is True for host_id in graph_host_ids
+    )
+    hosts_external = sum(
+        scope_status.get(host_id) is False for host_id in graph_host_ids
+    )
 
     stats = {
-        "hosts": len([n for n in (graph.get("nodes") or []) if n.get("type") == "host"]),
+        "hosts": len(graph_host_ids),
+        "hosts_internal": hosts_in_scope,
+        "hosts_in_scope": hosts_in_scope,
+        "hosts_external": hosts_external,
+        "hosts_scope_unknown": len(graph_host_ids) - hosts_in_scope - hosts_external,
         "services": len([n for n in (graph.get("nodes") or []) if n.get("type") == "service"]),
         "edges": len(graph.get("edges") or []),
     }
     fp_summary = _fingerprint_summary(enriched, k=top_k) if enriched else {}
     top_edges = _top_edges(graph, k=top_k) if graph else []
-    host_metrics, host_meta = _host_metrics(graph, hosts, criticality) if graph else ([], {})
+    host_metrics, host_meta = (
+        _host_metrics(
+            graph,
+            hosts,
+            criticality,
+            excluded_host_ids=excluded_host_ids,
+        )
+        if graph
+        else ([], {})
+    )
     top_hosts = {
-        "by_degree": _top_items(host_metrics, "degree", k=top_k),
-        "by_betweenness": _top_items(host_metrics, "betweenness", k=top_k),
-        "by_bytes": _top_items(host_metrics, "bytes_total", k=top_k),
-        "by_flows": _top_items(host_metrics, "flows_total", k=top_k),
-        "by_shortest_paths": _top_items(host_metrics, "shortest_paths_total", k=top_k),
+        "by_degree": _top_positive_items(host_metrics, "degree", k=top_k),
+        "by_betweenness": _top_positive_items(host_metrics, "betweenness", k=top_k),
+        "by_bytes": _top_positive_items(host_metrics, "bytes_total", k=top_k),
+        "by_flows": _top_positive_items(host_metrics, "flows_total", k=top_k),
+        "by_shortest_paths": _top_positive_items(
+            host_metrics,
+            "shortest_paths_total",
+            k=top_k,
+        ),
     }
     generated_at = datetime.now(timezone.utc).isoformat()
     summary = {
@@ -721,12 +883,14 @@ def run(
         "top_hosts": top_hosts,
         "host_metrics_meta": host_meta,
         "figures": figures,
+        "figures_manifest": (
+            _portable_relative_path(manifest_path_used, out_dir)
+            if manifest_path_used
+            else None
+        ),
     }
 
-    # Save JSON summary
     json_out = os.path.join(out_dir, "summary.json")
-    with open(json_out, "w", encoding="utf-8") as fh:
-        json.dump(summary, fh, ensure_ascii=False, indent=2)
 
     if host_metrics:
         metrics_path = os.path.join(out_dir, "host_metrics.jsonl")
@@ -734,35 +898,40 @@ def run(
             for rec in host_metrics:
                 fh.write(json.dumps(rec) + "\n")
 
-    # Markdown report
-    md_lines = _render_report_markdown(
-        title=title,
-        top_k=top_k,
-        stats=stats,
-        criticality=criticality,
-        hosts=hosts,
-        top_edges=top_edges,
-        host_metrics=host_metrics,
-        host_meta=host_meta,
-        fp_summary=fp_summary,
-        figures=figures,
-        pdf_enabled=pdf,
-    )
-
     report_path = os.path.join(out_dir, "report.md")
-    with open(report_path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(md_lines))
+
+    def write_markdown(pdf_generated: bool) -> None:
+        md_lines = _render_report_markdown(
+            title=title,
+            top_k=top_k,
+            stats=stats,
+            criticality=criticality,
+            hosts=hosts,
+            top_edges=top_edges,
+            host_metrics=host_metrics,
+            host_meta=host_meta,
+            fp_summary=fp_summary,
+            figures=figures,
+            pdf_enabled=pdf_generated,
+            figures_manifest_label=summary.get("figures_manifest"),
+        )
+        with open(report_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(md_lines))
+
+    # The provisional report never advertises a PDF. The artifact row is
+    # added only after Pandoc succeeds and the output file is verified.
+    write_markdown(pdf_generated=False)
 
     pdf_path = None
     if pdf:
-        pdf_path = os.path.join(out_dir, "report.pdf")
+        requested_pdf_path = os.path.join(out_dir, "report.pdf")
         try:
             result = subprocess.run(
                 [
                     "pandoc",
                     report_path,
                     "-o",
-                    pdf_path,
+                    requested_pdf_path,
                     "--resource-path",
                     out_dir,
                     "--standalone",
@@ -777,18 +946,42 @@ def run(
                 capture_output=True,
                 text=True,
             )
-            if result.stderr.strip():
-                print(f"[export] Pandoc warning: {result.stderr.strip()}")
+            stderr = (getattr(result, "stderr", "") or "").strip()
+            if stderr:
+                print(f"[export] Pandoc warning: {stderr}")
+            if (
+                os.path.isfile(requested_pdf_path)
+                and os.path.getsize(requested_pdf_path) > 0
+            ):
+                pdf_path = requested_pdf_path
+            else:
+                print(
+                    "[export] Pandoc completed without creating report.pdf; "
+                    "PDF was not generated."
+                )
         except FileNotFoundError:
             print("[export] Pandoc not found; PDF was not generated.")
-            pdf_path = None
         except subprocess.CalledProcessError as exc:
             err = (exc.stderr or "").strip()
             if err:
                 print(f"[export] Pandoc failed: {err}")
             else:
                 print(f"[export] Pandoc failed: {exc}")
-            pdf_path = None
+        if pdf_path is None and os.path.isfile(requested_pdf_path):
+            os.remove(requested_pdf_path)
+
+    if pdf_path:
+        write_markdown(pdf_generated=True)
+
+    summary["artifacts"] = {
+        "summary_json": "summary.json",
+        "report_markdown": "report.md",
+        "report_pdf": "report.pdf" if pdf_path else None,
+        "host_metrics": "host_metrics.jsonl" if host_metrics else None,
+        "figures_manifest": summary.get("figures_manifest"),
+    }
+    with open(json_out, "w", encoding="utf-8") as fh:
+        json.dump(summary, fh, ensure_ascii=False, indent=2)
 
     if pdf_path:
         print(f"[export] Summary -> {json_out}, Markdown -> {report_path}, PDF -> {pdf_path}")

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import pipeline
+from .notebook_common import report_pdf_message
 from .report_figures import generate_figures
 
 
@@ -13,7 +14,7 @@ def create_report_dashboard(
     default_top_k: int = 10,
     default_title: str = "Passive Network Mapping Report",
 ):
-    """Return an ipywidgets dashboard for generating report charts and PDF."""
+    """Return an ipywidgets dashboard for charts and optional PDF export."""
     try:
         import ipywidgets as widgets
         from IPython.display import clear_output
@@ -113,8 +114,12 @@ def create_report_dashboard(
         print("Summary:", report_dir / "summary.json")
         if manifest_path.exists():
             print("Manifest:", manifest_path)
-        if make_pdf.value:
-            print("PDF:", report_dir / "report.pdf")
+        print(
+            report_pdf_message(
+                report_dir / "report.pdf",
+                requested=bool(make_pdf.value),
+            )
+        )
 
     def _generate_then_export() -> None:
         _generate_charts()

@@ -1,75 +1,114 @@
 """Aggregate normalized flows into a minimal host/service inventory."""
 
+import csv
+import hashlib
 import json
 import os
 import socket
 from collections import Counter
 from typing import Dict, Iterable
 
+from .endpoints import infer_endpoints
 from .utils import write_jsonl
 
 
 _PKG_DIR = os.path.dirname(__file__)
 _REPO_ROOT = os.path.dirname(_PKG_DIR)
 
-NMAP_SERVICE_PATHS = [
-    os.environ.get('NMAP_SERVICES_PATH'),
-    os.path.join(_REPO_ROOT, 'data', 'nmap-services'),
-    # '/usr/share/nmap/nmap-services',
-    # '/usr/local/share/nmap/nmap-services',
+SERVICE_REGISTRY_PATHS = [
+    os.environ.get('PMMAP_SERVICE_REGISTRY_PATH'),
+    os.path.join(_REPO_ROOT, 'data', 'iana-service-names-port-numbers.csv'),
 ]
 
 
-def _candidate_files(path: str) -> list[str]:
-    """Return concrete files to try loading for the nmap-services database."""
+def _candidate_files(path: str | None) -> list[str]:
+    """Return concrete IANA registry files to try loading."""
     candidates: list[str] = []
     if not path:
         return candidates
     if os.path.isfile(path):
         candidates.append(path)
     elif os.path.isdir(path):
-        nested = os.path.join(path, 'nmap-services')
+        nested = os.path.join(path, 'iana-service-names-port-numbers.csv')
         if os.path.isfile(nested):
             candidates.append(nested)
     return candidates
 
 
-def _load_nmap_services() -> dict[tuple[str, int], str]:
-    """Load the nmap-services mapping once so role detection has rich data."""
-    service_map: dict[tuple[str, int], str] = {}
-    for candidate in NMAP_SERVICE_PATHS:
+def _load_service_registry(
+    paths: Iterable[str | None] | None = None,
+) -> tuple[dict[tuple[str, int], str], dict]:
+    """Load the IANA service registry and retain reproducibility provenance."""
+    for candidate in paths or SERVICE_REGISTRY_PATHS:
         files = _candidate_files(candidate)
         if not files:
             continue
-        file_path = files[0]
+        file_path = os.path.realpath(os.path.abspath(files[0]))
+        service_map: dict[tuple[str, int], str] = {}
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
+            with open(
+                file_path,
+                'r',
+                encoding='utf-8-sig',
+                errors='replace',
+                newline='',
+            ) as fh:
+                for row in csv.DictReader(fh):
+                    name = str(row.get('Service Name') or '').strip()
+                    port_str = str(row.get('Port Number') or '').strip()
+                    proto = str(row.get('Transport Protocol') or '').strip().lower()
+                    if not name or not port_str or not proto:
                         continue
-                    parts = line.split()
-                    if len(parts) < 2:
+                    # Range rows describe unassigned/reserved intervals, not
+                    # one concrete service endpoint.
+                    if '-' in port_str:
                         continue
-                    name = parts[0]
-                    port_proto = parts[1]
-                    if '/' not in port_proto:
-                        continue
-                    port_str, proto = port_proto.split('/', 1)
                     try:
                         port = int(port_str)
                     except ValueError:
                         continue
-                    key = (proto.lower(), port)
+                    if not 0 < port <= 65535:
+                        continue
+                    key = (proto, port)
                     service_map.setdefault(key, name)
             if service_map:
-                return service_map
+                with open(file_path, "rb") as fh:
+                    source_sha256 = hashlib.sha256(fh.read()).hexdigest()
+                return service_map, {
+                    "loaded": True,
+                    "kind": "iana_service_names_port_numbers",
+                    "path": file_path,
+                    "sha256": source_sha256,
+                    "entries": len(service_map),
+                    "source_url": (
+                        "https://www.iana.org/assignments/"
+                        "service-names-port-numbers/"
+                        "service-names-port-numbers.csv"
+                    ),
+                    "license": "CC0-1.0",
+                }
         except OSError:
             continue
-    return service_map
+    return {}, {
+        "loaded": False,
+        "kind": "iana_service_names_port_numbers",
+        "path": None,
+        "sha256": None,
+        "entries": 0,
+        "source_url": (
+            "https://www.iana.org/assignments/service-names-port-numbers/"
+            "service-names-port-numbers.csv"
+        ),
+        "license": "CC0-1.0",
+    }
 
 
-SERVICE_MAP = _load_nmap_services()
+SERVICE_MAP, SERVICE_REGISTRY_DATABASE = _load_service_registry()
+
+
+def service_registry_provenance() -> dict:
+    """Return a copy of the effective IANA service-registry provenance."""
+    return dict(SERVICE_REGISTRY_DATABASE)
 
 
 def _normalize_proto(value) -> str:
@@ -98,6 +137,7 @@ def _ensure_host(store: Dict[str, dict], ip: str) -> dict:
             'domains': set(),
             'bytes_in': 0,
             'bytes_out': 0,
+            'bytes_observed': 0,
             'flows_in': 0,
             'flows_out': 0,
             'services_offered': Counter(),
@@ -105,6 +145,7 @@ def _ensure_host(store: Dict[str, dict], ip: str) -> dict:
             'first_seen': None,
             'last_seen': None,
             'roles': set(),
+            'scope_values': set(),
         },
     )
 
@@ -208,24 +249,50 @@ def run(flows_path: str, out_dir: str):
             proto = _normalize_proto(rec.get('proto'))
             ts = rec.get('ts')
             bytes_val = _to_int(rec.get('bytes', 0))
+            forward_bytes = rec.get('bytes_src_to_dst')
+            reverse_bytes = rec.get('bytes_dst_to_src')
+            directionality = rec.get('traffic_directionality')
+            if forward_bytes is not None or reverse_bytes is not None:
+                src_to_dst_bytes = _to_int(forward_bytes)
+                dst_to_src_bytes = _to_int(reverse_bytes)
+            elif directionality == 'bidirectional_total':
+                src_to_dst_bytes = 0
+                dst_to_src_bytes = 0
+            else:
+                # Canonical and ordinary unidirectional flow exports describe
+                # counters in the observed source-to-destination direction.
+                src_to_dst_bytes = bytes_val
+                dst_to_src_bytes = 0
 
             if src_ip:
                 host = _ensure_host(hosts, src_ip)
-                host['bytes_out'] += bytes_val
+                host['bytes_out'] += src_to_dst_bytes
+                host['bytes_in'] += dst_to_src_bytes
+                host['bytes_observed'] += bytes_val
                 host['flows_out'] += 1
+                if isinstance(rec.get('src_in_scope'), bool):
+                    host['scope_values'].add(rec['src_in_scope'])
                 _update_time(host, ts)
-                dst_port = _to_int(rec.get('dst_port', 0))
-                host['services_used'][(proto, dst_port)] += 1
             if dst_ip:
                 host = _ensure_host(hosts, dst_ip)
-                host['bytes_in'] += bytes_val
+                host['bytes_in'] += src_to_dst_bytes
+                host['bytes_out'] += dst_to_src_bytes
+                host['bytes_observed'] += bytes_val
                 host['flows_in'] += 1
+                if isinstance(rec.get('dst_in_scope'), bool):
+                    host['scope_values'].add(rec['dst_in_scope'])
                 _update_time(host, ts)
-                dst_port = _to_int(rec.get('dst_port', 0))
-                host['services_offered'][(proto, dst_port)] += 1
-                role = _infer_role(proto, dst_port)
+
+            endpoints = infer_endpoints(rec, SERVICE_MAP)
+            if endpoints.service_observed:
+                client = _ensure_host(hosts, endpoints.client_ip)
+                server = _ensure_host(hosts, endpoints.server_ip)
+                service_key = (endpoints.proto, endpoints.server_port)
+                client['services_used'][service_key] += 1
+                server['services_offered'][service_key] += 1
+                role = _infer_role(endpoints.proto, endpoints.server_port)
                 if role:
-                    host['roles'].add(role)
+                    server['roles'].add(role)
 
             if rec.get('dhcp_mac') or rec.get('dhcp_assigned_ip'):
                 _apply_dhcp_metadata(hosts, rec)
@@ -243,11 +310,19 @@ def run(flows_path: str, out_dir: str):
             'domains': sorted(data['domains']),
             'bytes_in': data['bytes_in'],
             'bytes_out': data['bytes_out'],
+            'bytes_observed': data['bytes_observed'],
             'flows_in': data['flows_in'],
             'flows_out': data['flows_out'],
             'services_offered': list(_format_services(data['services_offered'])),
             'services_used': list(_format_services(data['services_used'])),
             'roles': sorted(data['roles']),
+            'in_scope': (
+                True
+                if True in data['scope_values']
+                else False
+                if False in data['scope_values']
+                else None
+            ),
         }
         if 'dhcp_lease_times' in data:
             record['dhcp_lease_times'] = data['dhcp_lease_times']

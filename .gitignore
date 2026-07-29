@@ -13,8 +13,11 @@ __pycache__/
 /data/**
 !/data/cpe_map.sample.yaml
 !/data/flows_demo.csv
-!/data/nmap-services/
-!/data/nmap-services/nmap-services
+!/data/iana-service-names-port-numbers.csv
+!/data/evaluation/
+!/data/evaluation/ground_truth_flows.csv
+!/data/evaluation/ground_truth_expected.json
+!/data/evaluation/os_cpe_label_map.json
 
 # Large capture/binary artifacts
 *.pcap

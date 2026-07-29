@@ -82,3 +82,21 @@ def ensure_exists(path: str | Path, label: str) -> None:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"{label} not found: {p}")
+
+
+def report_pdf_message(pdf_path: str | Path, *, requested: bool) -> str:
+    """Describe the PDF result without advertising a missing/empty artifact."""
+    path = Path(pdf_path)
+    try:
+        generated = path.is_file() and path.stat().st_size > 0
+    except OSError:
+        generated = False
+
+    if generated:
+        return f"PDF: {path}"
+    if requested:
+        return (
+            "PDF was not generated (Pandoc may be unavailable or conversion "
+            "failed); the Markdown report is available."
+        )
+    return "PDF was not requested; a Markdown-only report was generated."

@@ -5,13 +5,107 @@ from pmmap import pipeline
 NETFLAGS = [
     click.option('--include-cidrs', multiple=True, help='CIDR ranges to include, usually internal address ranges.'),
     click.option('--exclude-cidrs', multiple=True, help='CIDR ranges to exclude.'),
-    click.option('--drop-outside', is_flag=True, help='Drop records outside the configured include ranges.'),
+    click.option(
+        '--drop-outside',
+        is_flag=True,
+        default=None,
+        help='Drop records when neither endpoint is in the configured include ranges.',
+    ),
 ]
 
 
 @click.group()
 def cli():
     pass
+
+
+@cli.command(name='run')
+@click.option('--input', 'input_path', type=click.Path(exists=True),
+              help='Preprocessed CSV/JSON/Zeek-log file or directory.')
+@click.option('--flows', 'flows_path', type=click.Path(exists=True),
+              help='Already-normalized flows.jsonl file or its containing directory.')
+@click.option('--pcap', 'pcap_inputs', type=click.Path(exists=True), multiple=True,
+              help='Raw PCAP/PCAPNG files or directories to process with Zeek.')
+@click.option('--netflow', 'netflow_inputs', type=click.Path(exists=True), multiple=True,
+              help='Raw NetFlow/IPFIX files or directories to process with nfdump.')
+@click.option('--output', type=str, required=True,
+              help='Run directory containing all stage outputs and run_manifest.json.')
+@NETFLAGS[0]
+@NETFLAGS[1]
+@NETFLAGS[2]
+@click.option('--zeek-bin', default='zeek', show_default=True, help='Zeek binary.')
+@click.option('--zeek-script', 'zeek_scripts', multiple=True, help='Optional Zeek scripts.')
+@click.option('--nfdump-bin', default='nfdump', show_default=True, help='nfdump binary.')
+@click.option('--netflow-format', type=click.Choice(['csv', 'json']), default='csv',
+              show_default=True, help='nfdump output format.')
+@click.option('--p0f-bin', default='p0f', show_default=True,
+              help='p0f binary for optional passive OS fingerprinting.')
+@click.option('--cpe-map', 'cpe_map_path', type=click.Path(exists=True, dir_okay=False),
+              help='Optional fingerprint-to-CPE mapping. No sample map is loaded implicitly.')
+@click.option('--min-flows', type=click.IntRange(min=1), default=1, show_default=True,
+              help='Minimum flow count required for a graph edge.')
+@click.option('--external-cmd', type=str,
+              help='Optional external criticality command.')
+@click.option('--external-timeout', type=click.FloatRange(min=0.1), default=60.0,
+              show_default=True, help='External criticality timeout in seconds.')
+@click.option('--title', default='Passive Network Mapping Report', show_default=True,
+              help='Report title.')
+@click.option('--pdf/--no-pdf', default=False, show_default=True,
+              help='Attempt PDF generation with Pandoc.')
+@click.option('--top-k', type=click.IntRange(min=1), default=10, show_default=True,
+              help='Number of records in report leader tables.')
+@click.option('--hash-inputs/--no-hash-inputs', default=True, show_default=True,
+              help='Record SHA-256 hashes of source inputs in the run manifest.')
+def run_workflow(
+    input_path,
+    flows_path,
+    pcap_inputs,
+    netflow_inputs,
+    output,
+    include_cidrs,
+    exclude_cidrs,
+    drop_outside,
+    zeek_bin,
+    zeek_scripts,
+    nfdump_bin,
+    netflow_format,
+    p0f_bin,
+    cpe_map_path,
+    min_flows,
+    external_cmd,
+    external_timeout,
+    title,
+    pdf,
+    top_k,
+    hash_inputs,
+):
+    """Run the full mapping workflow from one selected input mode."""
+    try:
+        pipeline.run_all(
+            out_dir=output,
+            input_path=input_path,
+            flows_path=flows_path,
+            pcap_inputs=pcap_inputs,
+            netflow_inputs=netflow_inputs,
+            include_cidrs=include_cidrs or None,
+            exclude_cidrs=exclude_cidrs or None,
+            drop_outside=drop_outside,
+            zeek_bin=zeek_bin,
+            zeek_scripts=zeek_scripts,
+            nfdump_bin=nfdump_bin,
+            netflow_format=netflow_format,
+            p0f_bin=p0f_bin,
+            cpe_map_path=cpe_map_path,
+            min_flows=min_flows,
+            external_cmd=external_cmd,
+            external_timeout=external_timeout,
+            title=title,
+            pdf=pdf,
+            top_k=top_k,
+            hash_inputs=hash_inputs,
+        )
+    except Exception as exc:
+        raise click.ClickException(f"Workflow failed: {exc}") from exc
 
 
 @cli.command(name='normalize')
@@ -114,7 +208,7 @@ def enrich(flows, output, pcap_inputs, p0f_bin, cpe_map_path):
 @click.option('--min-flows', type=int, default=1, show_default=True,
               help='Minimum number of flows required to keep an edge in the graph.')
 def analyze(flows, output, hosts, enriched_hosts, min_flows):
-    """Build a host-to-service dependency graph with role and hostname signals."""
+    """Build an observed host-to-service communication graph."""
     try:
         pipeline.analyze(
             flows_path=flows,
@@ -137,7 +231,16 @@ def analyze(flows, output, hosts, enriched_hosts, min_flows):
               help='External criticality tool. It reads JSON from stdin and returns JSON on stdout.')
 @click.option('--dump-input', 'dump_input_path', type=str, required=False,
               help='Path for saving the JSON payload sent to the external tool.')
-def criticality(graph, output, hosts, external_cmd, dump_input_path):
+@click.option('--external-timeout', type=click.FloatRange(min=0.1), default=60.0,
+              show_default=True, help='External criticality timeout in seconds.')
+def criticality(
+    graph,
+    output,
+    hosts,
+    external_cmd,
+    dump_input_path,
+    external_timeout,
+):
     """Rank nodes by criticality using the built-in heuristic or an external tool."""
     try:
         pipeline.criticality(
@@ -146,6 +249,7 @@ def criticality(graph, output, hosts, external_cmd, dump_input_path):
             hosts_path=hosts,
             external_cmd=external_cmd,
             dump_input_path=dump_input_path,
+            external_timeout=external_timeout,
         )
     except Exception as exc:
         raise click.ClickException(f"Criticality failed: {exc}") from exc

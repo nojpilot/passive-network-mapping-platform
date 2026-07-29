@@ -167,7 +167,7 @@ class CLIPipelineTests(unittest.TestCase):
             self.assertEqual(summary["top_edges"][0]["aggregation"], "destination_service")
             self.assertIn("Top Service Destinations", (report_dir / "report.md").read_text())
 
-    def test_demo_pipeline_smoke(self) -> None:
+    def test_demo_pipeline_integration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             in_dir = tmp_path / "input"

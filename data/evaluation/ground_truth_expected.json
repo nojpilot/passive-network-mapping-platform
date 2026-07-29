@@ -1,0 +1,56 @@
+{
+  "scope": {
+    "include_cidrs": [
+      "10.0.0.0/8"
+    ],
+    "drop_outside": true
+  },
+  "counts": {
+    "normalization_input_records": 8,
+    "normalized_flows": 7,
+    "normalization_filtered_outside": 1,
+    "inventory_hosts": 11,
+    "graph_hosts": 11,
+    "graph_services": 3,
+    "graph_edges": 6,
+    "criticality_rows": 9,
+    "host_metric_rows": 9
+  },
+  "required_services": [
+    "10.0.0.100:443/tcp",
+    "10.0.0.50:22/tcp",
+    "8.8.8.8:53/udp"
+  ],
+  "forbidden_services": [
+    "10.0.0.14:60000/tcp",
+    "10.0.0.17:40001/tcp",
+    "198.51.100.20:443/tcp"
+  ],
+  "required_edges": [
+    [
+      "10.0.0.11",
+      "10.0.0.100:443/tcp"
+    ],
+    [
+      "10.0.0.12",
+      "10.0.0.100:443/tcp"
+    ],
+    [
+      "10.0.0.13",
+      "10.0.0.100:443/tcp"
+    ],
+    [
+      "10.0.0.14",
+      "10.0.0.50:22/tcp"
+    ],
+    [
+      "10.0.0.15",
+      "8.8.8.8:53/udp"
+    ],
+    [
+      "203.0.113.5",
+      "10.0.0.100:443/tcp"
+    ]
+  ],
+  "expected_top_criticality": "10.0.0.100"
+}

@@ -1,0 +1,7 @@
+# Direct dependency versions recorded by the successful Windows/Python 3.12
+# thesis evaluation run. The run manifest records the same environment.
+click==8.4.2
+pydantic==2.13.4
+PyYAML==6.0.3
+networkx==3.6.1
+matplotlib==3.11.1
