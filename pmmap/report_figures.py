@@ -208,9 +208,9 @@ def generate_figures(
                     overview,
                     positions,
                     ax=ax,
-                    width=0.9,
-                    alpha=0.55,
-                    edge_color="#7f8c8d",
+                    width=1.8,
+                    alpha=0.9,
+                    edge_color="#4f5b62",
                 )
                 nx.draw_networkx_nodes(
                     overview,
@@ -245,7 +245,7 @@ def generate_figures(
                     ax=ax,
                 )
                 ax.set_title(
-                    "Filtered Communication Map: Top Service Hubs and Sample Clients"
+                    "Leading Service Destinations and Sample Observed Clients"
                 )
                 ax.legend(loc="best")
                 ax.axis("off")
@@ -256,8 +256,8 @@ def generate_figures(
                     {
                         "path": _portable_relative_path(out_path, report_dir),
                         "caption": (
-                            "Filtered communication map of the leading service "
-                            "destinations and up to five observed clients per service."
+                            "Illustrative communication map of the leading service "
+                            "destinations and up to five observed clients per destination."
                         ),
                         "section": "Communication Map",
                     }

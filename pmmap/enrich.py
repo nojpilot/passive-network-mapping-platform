@@ -62,16 +62,28 @@ def _collect_files(inputs: Sequence[str], extensions: Sequence[str]) -> list[str
 
 
 def _parse_p0f_log(text: str) -> dict[str, Counter]:
-    """Parse p0f log lines to accumulate OS guesses per IP."""
+    """Parse p0f log lines to accumulate non-fuzzy OS guesses per IP."""
     ip_os: dict[str, Counter] = defaultdict(Counter)
     # p0f v3 log line format: mod=...|cli=IP/port|srv=IP/port|subj=cli|os=Windows NT kernel|...
     pattern_os_line = re.compile(r'os=([^|]+)')
     pattern_cli = re.compile(r'cli=([0-9]{1,3}(?:\.[0-9]{1,3}){3})/')
     pattern_srv = re.compile(r'srv=([0-9]{1,3}(?:\.[0-9]{1,3}){3})/')
     pattern_subj = re.compile(r'subj=([a-z]+)')
+    pattern_params = re.compile(r'(?:^|\|)params=([^|]*)')
     # fallback for very old log style with "genre"
     pattern_legacy = re.compile(r'(\d+\.\d+\.\d+\.\d+)[^\n]*genre\s+([^|\n]+)')
     for line in text.splitlines():
+        params_match = pattern_params.search(line)
+        params = {
+            item.strip().lower()
+            for item in (params_match.group(1).split(',') if params_match else [])
+            if item.strip()
+        }
+        # The output schema currently has no confidence field. Promoting a
+        # p0f approximate match without its "fuzzy" qualifier would make weak
+        # evidence look exact, so retain only non-fuzzy guesses.
+        if 'fuzzy' in params:
+            continue
         os_match = pattern_os_line.search(line)
         if os_match:
             guess = os_match.group(1).strip()

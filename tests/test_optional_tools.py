@@ -104,6 +104,17 @@ class OptionalIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(parsed["10.0.0.1"]["Windows 11 or newer"], 1)
 
+    def test_p0f_parser_does_not_promote_fuzzy_os_match(self) -> None:
+        parsed = _parse_p0f_log(
+            "mod=syn|cli=10.0.0.1/50000|srv=10.0.0.2/443|"
+            "subj=cli|os=Linux 2.2.x-3.x|params=generic\n"
+            "mod=syn+ack|cli=10.0.0.1/50000|srv=10.0.0.2/443|"
+            "subj=srv|os=Windows XP|params=fuzzy\n"
+        )
+
+        self.assertEqual(parsed["10.0.0.1"]["Linux 2.2.x-3.x"], 1)
+        self.assertNotIn("10.0.0.2", parsed)
+
     def test_external_criticality_json_is_read_from_stdout(self) -> None:
         payload = {"nodes": [{"id": "a"}], "edges": []}
         with patch(

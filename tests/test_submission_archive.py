@@ -3,13 +3,25 @@ import json
 import tempfile
 import unittest
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest.mock import patch
 
 from scripts import build_submission_archive as builder
 
 
 class SubmissionArchiveTests(unittest.TestCase):
+    def test_repository_root_forms_include_wsl_mount_for_windows_path(self) -> None:
+        forms = builder._repository_root_forms(
+            PureWindowsPath("C:/Users/example/project")
+        )
+
+        self.assertIn("/mnt/c/Users/example/project", forms)
+        reverse_forms = builder._repository_root_forms(
+            PurePosixPath("/mnt/c/Users/example/project")
+        )
+        self.assertIn(r"C:\Users\example\project", reverse_forms)
+        self.assertIn("C:/Users/example/project", reverse_forms)
+
     def test_portable_artifact_hash_chain_is_repaired(self) -> None:
         enriched_path = "data/run/cesnet/enriched/enriched_hosts.jsonl"
         fingerprint_path = "data/run/cesnet/fingerprint_validation.json"
@@ -81,10 +93,13 @@ class SubmissionArchiveTests(unittest.TestCase):
             prefix = f"{builder.ARCHIVE_PREFIX}/"
             with zipfile.ZipFile(output_a) as built:
                 names = set(built.namelist())
+                self.assertTrue(
+                    all(info.create_system == 3 for info in built.infolist())
+                )
                 self.assertIn(f"{prefix}APPENDIX_MANIFEST.json", names)
                 self.assertIn(f"{prefix}data/evaluation/cesnet/merged_tls.csv", names)
                 self.assertIn(
-                    f"{prefix}data/evaluation/cesnet/debian12_traffic_sample.pcap",
+                    f"{prefix}data/evaluation/cesnet/debian10_traffic_sample.pcap",
                     names,
                 )
                 self.assertNotIn(f"{prefix}unused/large-capture.pcap", names)

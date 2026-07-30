@@ -11,9 +11,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Iterable
 
 
@@ -88,6 +89,85 @@ SELECTED_RESULT_FILES = (
     "data/run/ground_truth/run_manifest.json",
 )
 
+RAW_PCAP_RESULT_FILES = (
+    "data/run/zeek_debian10/criticality/criticality.jsonl",
+    "data/run/zeek_debian10/criticality/criticality_top.json",
+    "data/run/zeek_debian10/enriched/enriched_hosts.jsonl",
+    "data/run/zeek_debian10/enriched/enrichment_manifest.json",
+    "data/run/zeek_debian10/graph/analysis_stats.json",
+    "data/run/zeek_debian10/graph/edges.jsonl",
+    "data/run/zeek_debian10/graph/graph.json",
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/capture_loss.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/conn.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/dhcp.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/dns.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/known_hosts.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/known_services.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/loaded_scripts.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/notice.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/ntp.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/packet_filter.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/ssl.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/stats.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/telemetry.log"
+    ),
+    (
+        "data/run/zeek_debian10/ingest/zeek/"
+        "0001_debian10_traffic_sample_pcap/weird.log"
+    ),
+    "data/run/zeek_debian10/inventory/hosts.jsonl",
+    "data/run/zeek_debian10/normalized/flows.jsonl",
+    "data/run/zeek_debian10/normalized/normalization_stats.json",
+    "data/run/zeek_debian10/report/assets/communication_map.png",
+    "data/run/zeek_debian10/report/assets/host_roles.png",
+    "data/run/zeek_debian10/report/assets/host_traffic_mix.png",
+    "data/run/zeek_debian10/report/assets/top_criticality.png",
+    "data/run/zeek_debian10/report/assets/top_edges_flows.png",
+    "data/run/zeek_debian10/report/figures_manifest.json",
+    "data/run/zeek_debian10/report/host_metrics.jsonl",
+    "data/run/zeek_debian10/report/report.md",
+    "data/run/zeek_debian10/report/summary.json",
+    "data/run/zeek_debian10/run_manifest.json",
+)
+
 REQUIRED_FIGURE_FILES = (
     "communication_map.png",
     "host_roles.png",
@@ -99,17 +179,17 @@ REQUIRED_FIGURE_FILES = (
 DATASET_MEMBERS = {
     "merged_tls.csv": "data/evaluation/cesnet/merged_tls.csv",
     (
-        "linux__debian__12-bookworm/"
-        "2025-02-05__vagrant__debian_bookworm64/traffic.pcap"
-    ): "data/evaluation/cesnet/debian12_traffic_sample.pcap",
+        "linux__debian__10-buster/"
+        "2025-02-05__vagrant__debian_buster64/traffic.pcap"
+    ): "data/evaluation/cesnet/debian10_traffic_sample.pcap",
     (
-        "linux__debian__12-bookworm/"
-        "2025-02-05__vagrant__debian_bookworm64/flows.csv"
-    ): "data/evaluation/cesnet/debian12_flows_reference.csv",
+        "linux__debian__10-buster/"
+        "2025-02-05__vagrant__debian_buster64/flows.csv"
+    ): "data/evaluation/cesnet/debian10_flows_reference.csv",
     (
-        "linux__debian__12-bookworm/"
-        "2025-02-05__vagrant__debian_bookworm64/info.json"
-    ): "data/evaluation/cesnet/debian12_info.json",
+        "linux__debian__10-buster/"
+        "2025-02-05__vagrant__debian_buster64/info.json"
+    ): "data/evaluation/cesnet/debian10_info.json",
 }
 
 
@@ -127,6 +207,27 @@ def _hash_file(path: Path, algorithm: str = "sha256") -> str:
     return digest.hexdigest()
 
 
+def _repository_root_forms(resolved_root: PurePath) -> set[str]:
+    """Return native and WSL mount spellings of a resolved repository path."""
+    posix_path = resolved_root.as_posix()
+    root_forms = {
+        str(resolved_root),
+        posix_path,
+    }
+    if resolved_root.drive:
+        drive = resolved_root.drive.rstrip(":").lower()
+        drive_relative = posix_path.split(":", 1)[1].lstrip("/")
+        root_forms.add(f"/mnt/{drive}/{drive_relative}")
+    wsl_match = re.fullmatch(r"/mnt/([a-zA-Z])/(.+)", posix_path)
+    if wsl_match:
+        windows_posix = (
+            f"{wsl_match.group(1).upper()}:/{wsl_match.group(2)}"
+        )
+        root_forms.add(windows_posix)
+        root_forms.add(windows_posix.replace("/", "\\"))
+    return root_forms
+
+
 def _portable_project_payload(path: Path, repo_root: Path) -> bytes:
     """Remove the build machine's repository prefix from packaged text files."""
     payload = path.read_bytes()
@@ -137,11 +238,7 @@ def _portable_project_payload(path: Path, repo_root: Path) -> bytes:
     except UnicodeDecodeError:
         return payload
 
-    resolved_root = repo_root.resolve()
-    root_forms = {
-        str(resolved_root),
-        resolved_root.as_posix(),
-    }
+    root_forms = _repository_root_forms(repo_root.resolve())
     for root_form in sorted(root_forms, key=len, reverse=True):
         text = text.replace(root_form, "${REPOSITORY_ROOT}")
         # JSON escapes Windows separators, so also replace the serialized form.
@@ -189,7 +286,7 @@ def _project_files(repo_root: Path) -> list[Path]:
     if workflow.is_file():
         files.add(workflow)
 
-    for relative in SELECTED_RESULT_FILES:
+    for relative in (*SELECTED_RESULT_FILES, *RAW_PCAP_RESULT_FILES):
         path = repo_root / relative
         if not path.is_file():
             raise FileNotFoundError(
@@ -236,7 +333,7 @@ def _read_dataset_members(dataset_path: Path) -> dict[str, bytes]:
 def _dataset_notice(dataset_payloads: dict[str, bytes]) -> bytes:
     tls_payload = dataset_payloads["data/evaluation/cesnet/merged_tls.csv"]
     pcap_payload = dataset_payloads[
-        "data/evaluation/cesnet/debian12_traffic_sample.pcap"
+        "data/evaluation/cesnet/debian10_traffic_sample.pcap"
     ]
     text = f"""# CESNET evaluation inputs
 
@@ -254,12 +351,25 @@ and SNI evidence and OS labels in a sidecar, while synthesising network
 addresses, ports, timestamps, packet counts, and byte counts. The original CSV
 itself is not modified.
 
-`debian12_traffic_sample.pcap` is a compact raw-input fixture extracted from
-the Debian 12 capture and has SHA-256 `{_hash_bytes(pcap_payload)}`. Its
+`debian10_traffic_sample.pcap` is a compact raw-input fixture extracted from
+the Debian 10 capture and has SHA-256 `{_hash_bytes(pcap_payload)}`. Its
 corresponding upstream `info.json` and `flows.csv` are included unchanged. The
 upstream flow-export header embeds IPFIX data types and is retained as a
-reference artifact; it is not an input for the generic CSV adapter. Use the
-PCAP with Zeek to exercise the framework's raw-input path.
+reference artifact; it is not an input for the generic CSV adapter. The
+reference contains 301 flow records, including 114 with TLS evidence and 28
+with DNS evidence. The recorded raw-input run used Zeek 8.2.1 and p0f 3.09b:
+
+```bash
+python main.py run \\
+  --pcap data/evaluation/cesnet/debian10_traffic_sample.pcap \\
+  --output data/run/zeek_debian10 \\
+  --include-cidrs 10.0.2.0/24 \\
+  --include-cidrs fe80::/10 \\
+  --drop-outside \\
+  --zeek-bin /opt/zeek/bin/zeek \\
+  --p0f-bin /usr/sbin/p0f \\
+  --no-pdf
+```
 
 The complete 2.37 GB upstream archive is intentionally omitted because the
 evaluation does not consume its remaining captures. Download it from the DOI
@@ -280,6 +390,8 @@ def _write_entry(target: zipfile.ZipFile, relative: str, payload: bytes) -> None
         filename=f"{ARCHIVE_PREFIX}/{relative}",
         date_time=(2025, 1, 1, 0, 0, 0),
     )
+    # Do not let the Python host platform alter central-directory metadata.
+    info.create_system = 3
     info.compress_type = zipfile.ZIP_DEFLATED
     mode = (
         0o100755

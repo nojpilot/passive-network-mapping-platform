@@ -338,8 +338,11 @@ The second command requires the local CESNET ZIP described above.
 
 ## Electronic Appendix
 
-Build the deterministic electronic appendix archive after placing the verified
-upstream dataset ZIP at `data/cesnet-idle-os-traffic.zip`:
+The appendix builder packages recorded outputs; it does not rerun the
+evaluation. Build the deterministic archive after placing the verified
+upstream dataset ZIP at `data/cesnet-idle-os-traffic.zip` and generating the
+three output directories `data/run/ground_truth`, `data/run/cesnet`, and
+`data/run/zeek_debian10` with the commands documented in this README:
 
 ```bash
 python scripts/build_submission_archive.py
@@ -348,11 +351,13 @@ python scripts/build_submission_archive.py
 The archive is written to
 `data/run/submission/passive-network-mapping-platform-appendix.zip`. It
 contains the source, tests, notebooks, documentation, configuration, the
-complete recorded machine-readable CESNET and controlled-correctness pipeline
-chains, the CESNET report figures, the complete unchanged `merged_tls.csv`
-member used by the evaluation, and one compact Debian 12 PCAP fixture with its
-upstream metadata. `APPENDIX_MANIFEST.json` records every included file's size
-and SHA-256 hash.
+complete recorded machine-readable tabular-CESNET, controlled-correctness,
+and raw-PCAP pipeline chains, the report figures, the complete unchanged
+`merged_tls.csv` member used by the evaluation, and the compact Debian 10
+PCAP used by the recorded Zeek integration run with its upstream metadata
+and reference flows. The selected PCAP is about 2.16 MB and its reference
+contains both TLS and DNS evidence. `APPENDIX_MANIFEST.json` records every
+included file's size and SHA-256 hash.
 
 The builder verifies the original CESNET archive checksum before extracting
 only those small members. It deliberately excludes the complete 2.37 GB
@@ -367,6 +372,23 @@ python scripts/run_cesnet.py \
   --input data/evaluation/cesnet/merged_tls.csv \
   --no-pdf
 ```
+
+On a system with Zeek and p0f installed, the packaged raw-PCAP scenario can
+be rerun with:
+
+```bash
+python main.py run \
+  --pcap data/evaluation/cesnet/debian10_traffic_sample.pcap \
+  --output data/run/zeek_debian10 \
+  --include-cidrs 10.0.2.0/24 \
+  --include-cidrs fe80::/10 \
+  --drop-outside \
+  --zeek-bin /opt/zeek/bin/zeek \
+  --p0f-bin /usr/sbin/p0f \
+  --no-pdf
+```
+
+Use the corresponding executable paths for a different installation.
 
 Public repository:
 
